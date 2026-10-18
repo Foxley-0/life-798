@@ -33,9 +33,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -59,6 +62,8 @@ fun LoginScreen(
     onLogin: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val graphCodeFocusRequester = remember { FocusRequester() }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -109,7 +114,10 @@ fun LoginScreen(
                     color = MaterialTheme.colorScheme.secondaryContainer
                 ) {
                     IconButton(
-                        onClick = onLoadCaptcha,
+                        onClick = {
+                            onLoadCaptcha()
+                            graphCodeFocusRequester.requestFocus()
+                        },
                         enabled = !loading && state.canLoadCaptcha,
                         modifier = Modifier.size(52.dp)
                     ) {
@@ -121,7 +129,9 @@ fun LoginScreen(
             OutlinedTextField(
                 value = graphCode,
                 onValueChange = onGraphCodeChange,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(graphCodeFocusRequester),
                 label = { Text("图形验证码") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true
