@@ -40,8 +40,10 @@ jobs:
           APP_SIGN_SALT: ${{ secrets.APP_SIGN_SALT }}
         run: |
           if [ -z "$API_GATEWAY" ]; then
-            echo "::error::缺少仓库 Secret: API_GATEWAY"
-            exit 1
+            echo "::warning::未配置 Secret API_GATEWAY，产出的 APK 无法连接服务端，仅用于验证编译是否通过"
+          fi
+          if [ -z "$APP_SIGN_SALT" ]; then
+            echo "::warning::未配置 Secret APP_SIGN_SALT，登录签名会失败"
           fi
           printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
           printf 'APP_SIGN_SALT=%s\n' "$APP_SIGN_SALT" >> secrets.properties
