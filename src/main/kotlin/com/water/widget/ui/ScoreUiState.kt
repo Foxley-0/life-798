@@ -15,7 +15,14 @@ data class ScoreUiState(
     val totalMoneyText: String,
     val logs: List<ScoreLogUiState>,
     val isReady: Boolean,
-    val message: String
+    val message: String,
+    val accountKey: String,
+    val scoreLoading: Boolean = false,
+    val bills: List<WaterBillLogUiState> = emptyList(),
+    val billLoading: Boolean = false,
+    val billMessage: String = "",
+    val billPage: Int = -1,
+    val hasMoreBills: Boolean = false
 )
 
 data class ScoreLogUiState(
@@ -26,7 +33,7 @@ data class ScoreLogUiState(
 )
 
 object ScoreUiStateFactory {
-    fun loading(account: Account): ScoreUiState = empty(account, "正在刷新积分...")
+    fun loading(account: Account): ScoreUiState = empty(account, "正在刷新积分…").copy(scoreLoading = true)
 
     fun from(
         account: Account,
@@ -46,18 +53,24 @@ object ScoreUiStateFactory {
 
         return ScoreUiState(
             accountName = displayName(account),
+            accountKey = account.phone,
             validScore = validScore,
             totalScore = totalScore,
             validMoneyText = moneyText(validScore),
             totalMoneyText = moneyText(totalScore),
             logs = logs,
             isReady = true,
-            message = if (logs.isEmpty()) "暂无积分使用日志" else "最近 ${logs.size} 条积分记录"
+            message = when {
+                scoreJson == null || scoreJson.optInt("code", -1) != 0 -> "积分记录获取失败，请下拉重试"
+                logs.isEmpty() -> "暂无积分变动"
+                else -> "最近 ${logs.size} 条积分记录"
+            }
         )
     }
 
     private fun empty(account: Account, message: String): ScoreUiState = ScoreUiState(
         accountName = displayName(account),
+        accountKey = account.phone,
         validScore = 0,
         totalScore = 0,
         validMoneyText = "≈0.00元",
@@ -90,6 +103,7 @@ object ScoreUiStateFactory {
     }
 
     private fun readScore(item: JSONObject, data: JSONObject?): Int {
+        if (data?.has("spend") == true) return data.optInt("spend", 0)
         val keys = arrayOf("score", "spend", "changeScore", "change_score", "amount", "value", "num", "points")
         for (key in keys) {
             if (item.has(key)) return item.optInt(key, 0)
@@ -129,6 +143,11 @@ object ScoreUiStateFactory {
     }
 
     private fun readTitle(item: JSONObject, data: JSONObject?, score: Int): String {
+        when (item.optInt("type", data?.optInt("type", -1) ?: -1)) {
+            107 -> return "接水积分消费"
+            105 -> return "积分兑换"
+            106 -> return "积分抽奖"
+        }
         val keys = arrayOf("msg", "name", "title", "desc", "remark", "memo", "typeName")
         for (key in keys) {
             val value = item.optString(key, "").takeIf { it.isNotBlank() }

@@ -2,12 +2,19 @@ package com.water.widget.ui
 
 import android.content.Context
 import com.water.widget.WaterConsumption
+import com.water.widget.WaterEstimate
+import com.water.widget.WaterUsageSettings
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.Calendar
 import java.util.LinkedHashSet
 import java.util.Locale
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 将服务端当前可见的积分流水与本地确认的设备账单合并到日汇总。
@@ -15,9 +22,19 @@ import java.util.Locale
  */
 object UsageHistoryStore {
     private const val PREFS = "usage_history_v1"
+    private val revision = MutableStateFlow(0L)
+    val changes = revision.asStateFlow()
+    private val settlements = MutableSharedFlow<String>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val waterSettled = settlements.asSharedFlow()
 
+    fun notifyWaterSettled(accountKey: String) {
+        settlements.tryEmit(accountKey)
+    }
+
+    @Synchronized
     fun mergeAndRead(context: Context, accountKey: String, scoreJson: JSONObject?): WaterUsageUiState {
-        if (accountKey.isBlank()) return WaterUsageUiState()
+        val estimate = WaterUsageSettings.read(context)
+        if (accountKey.isBlank()) return WaterUsageUiState(showWaterEstimate = estimate.visible)
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val key = "account_${digest(accountKey)}"
         val ledger = UsageHistoryLedger.fromJson(
@@ -25,10 +42,12 @@ object UsageHistoryStore {
         )
         if (ledger.merge(scoreJson)) {
             prefs.edit().putString(key, ledger.toJson().toString()).apply()
+            revision.value += 1
         }
-        return ledger.toUiState()
+        return ledger.toUiState(estimate = estimate)
     }
 
+    @Synchronized
     fun record(context: Context, accountKey: String, consumption: WaterConsumption) {
         if (accountKey.isBlank()) return
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -38,6 +57,7 @@ object UsageHistoryStore {
         )
         if (ledger.recordLocal(consumption.historyKey, consumption.occurredAt, consumption.scoreEquivalent)) {
             prefs.edit().putString(key, ledger.toJson().toString()).apply()
+            revision.value += 1
         }
     }
 
@@ -49,7 +69,8 @@ object UsageHistoryStore {
 internal class UsageHistoryLedger(
     private val seen: LinkedHashSet<String> = LinkedHashSet(),
     private val dayTotals: MutableMap<String, Int> = linkedMapOf(),
-    private var localThrough: Long = 0L
+    private var localThrough: Long = 0L,
+    private val bills: MutableMap<String, Pair<String, Int>> = linkedMapOf()
 ) {
     fun merge(scoreJson: JSONObject?): Boolean {
         if (scoreJson == null || scoreJson.optInt("code", -999) != 0) return false
@@ -70,8 +91,26 @@ internal class UsageHistoryLedger(
                 }
                 continue
             }
-            if (time <= localThrough) continue
-            if (record(recordIdentity(record), time, amount)) changed = true
+            val billId = data?.optString("sn")?.takeIf(String::isNotBlank)
+            if (billId != null) {
+                val key = "bill:id:$billId"
+                val hash = fingerprint(key)
+                // 将旧积分流水迁移到同一账单，保留历史金额；已经记过账单时扣回旧的重复项。
+                if (seen.remove(fingerprint(recordIdentity(record)))) {
+                    val day = dayKey(time)
+                    if (bills.containsKey(hash) || seen.contains(hash)) {
+                        dayTotals[day] = (dayTotals[day] ?: 0) - amount
+                    } else {
+                        bills[hash] = day to amount
+                    }
+                    changed = true
+                }
+                if (time <= localThrough && !bills.containsKey(hash) && !seen.contains(hash)) continue
+                if (recordBill(key, time, amount)) changed = true
+            } else {
+                if (time <= localThrough) continue
+                if (record(recordIdentity(record), time, amount)) changed = true
+            }
         }
         return changed
     }
@@ -79,9 +118,23 @@ internal class UsageHistoryLedger(
     fun recordLocal(historyKey: String, time: Long, amount: Int): Boolean {
         val occurredAt = normalizeEpochMillis(time)
         if (historyKey.isBlank() || occurredAt <= 0L || amount <= 0) return false
-        val boundaryChanged = occurredAt > localThrough
-        if (boundaryChanged) localThrough = occurredAt
-        return record(historyKey, occurredAt, amount) || boundaryChanged
+        return if (historyKey.startsWith("bill:id:")) recordBill(historyKey, occurredAt, amount)
+        else record(historyKey, occurredAt, amount)
+    }
+
+    private fun recordBill(historyKey: String, occurredAt: Long, amount: Int): Boolean {
+        val hash = fingerprint(historyKey)
+        val previous = bills[hash]
+        if (previous != null) {
+            if (amount <= previous.second) return false
+            dayTotals[previous.first] = (dayTotals[previous.first] ?: 0) + amount - previous.second
+            bills[hash] = previous.first to amount
+            return true
+        }
+        val day = dayKey(occurredAt)
+        if (!seen.remove(hash)) dayTotals[day] = (dayTotals[day] ?: 0) + amount
+        bills[hash] = day to amount
+        return true
     }
 
     private fun record(historyKey: String, occurredAt: Long, amount: Int): Boolean {
@@ -91,8 +144,8 @@ internal class UsageHistoryLedger(
         return true
     }
 
-    fun toUiState(now: Calendar = Calendar.getInstance()): WaterUsageUiState {
-        if (dayTotals.isEmpty()) return WaterUsageUiState()
+    fun toUiState(now: Calendar = Calendar.getInstance(), estimate: WaterEstimate = WaterEstimate()): WaterUsageUiState {
+        if (dayTotals.isEmpty()) return WaterUsageUiState(showWaterEstimate = estimate.visible)
         val todayKey = dayKey(now.timeInMillis)
         val monthPrefix = "%04d-%02d".format(
             Locale.ROOT,
@@ -107,16 +160,22 @@ internal class UsageHistoryLedger(
             todayCostText = moneyText(today),
             monthCostText = moneyText(month),
             yearCostText = moneyText(year),
-            todayWaterText = waterText(today),
-            monthWaterText = waterText(month),
-            yearWaterText = waterText(year)
+            todayWaterText = estimate.waterText(today),
+            monthWaterText = estimate.waterText(month),
+            yearWaterText = estimate.waterText(year),
+            showWaterEstimate = estimate.visible
         )
     }
 
     fun toJson(): JSONObject {
         val days = JSONObject()
         dayTotals.forEach { (day, total) -> days.put(day, total) }
+        val billEntries = JSONObject()
+        bills.forEach { (key, entry) ->
+            billEntries.put(key, JSONObject().put("day", entry.first).put("amount", entry.second))
+        }
         return JSONObject()
+            .put("bills", billEntries)
             .put("seen", JSONArray(seen.toList()))
             .put("days", days)
             .put("localThrough", localThrough)
@@ -138,7 +197,14 @@ internal class UsageHistoryLedger(
                     values.optInt(day, 0).takeIf { it >= 0 }?.let { days[day] = it }
                 }
             }
-            return UsageHistoryLedger(seen, days, json.optLong("localThrough", 0L))
+            val bills = linkedMapOf<String, Pair<String, Int>>()
+            json.optJSONObject("bills")?.let { entries ->
+                entries.keys().forEach { key ->
+                    val entry = entries.getJSONObject(key)
+                    bills[key] = entry.getString("day") to entry.getInt("amount")
+                }
+            }
+            return UsageHistoryLedger(seen, days, json.optLong("localThrough", 0L), bills)
         }
 
         private fun recordIdentity(record: JSONObject): String {
@@ -195,15 +261,5 @@ internal class UsageHistoryLedger(
         }
 
         private fun moneyText(score: Int): String = "¥${String.format(Locale.CHINA, "%.2f", score / 1000.0)}"
-
-        private fun waterText(score: Int): String {
-            val millilitres = score * 500 / 160
-            return if (millilitres >= 1000) {
-                String.format(Locale.CHINA, "%.1f L", millilitres / 1000.0)
-            } else {
-                val roundedMillilitres = (millilitres + 5) / 10 * 10
-                "$roundedMillilitres ml"
-            }
-        }
     }
 }

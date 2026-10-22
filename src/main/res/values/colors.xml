@@ -2,6 +2,6 @@
 <resources>
     <color name="widget_bg">#ffffff</color>
     <color name="widget_title">#2c3e50</color>
-    <color name="widget_status_text">#95a5a6</color>
+    <color name="widget_status_text">#405258</color>
     <color name="bg_main">#f5f6f8</color>
 </resources>

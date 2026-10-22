@@ -21,7 +21,7 @@ public class WaterApi {
                 if (text != null) {
                     cb.onResult("设备 " + text);
                 } else if ("TOKEN_EXPIRED".equals(err)) {
-                    cb.onResult("启动失败：登录已过期，请重新登录");
+                    cb.onResult("启动失败：用水登录未通过验证，请检查登录状态");
                 } else {
                     cb.onResult("启动失败：" + err);
                 }
@@ -41,7 +41,7 @@ public class WaterApi {
                 if (text != null) {
                     cb.onResult("设备 " + text);
                 } else if ("TOKEN_EXPIRED".equals(err)) {
-                    cb.onResult("启动失败：登录已过期，请重新登录");
+                    cb.onResult("启动失败：用水登录未通过验证，请检查登录状态");
                 } else {
                     cb.onResult("启动失败：" + err);
                 }

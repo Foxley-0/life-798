@@ -165,6 +165,25 @@ class WalletModelsTest {
         assertEquals(3.0, wallets.single().balance, 0.0)
     }
 
+    @Test
+    fun `充值订单保留待确认与核算中状态直到服务端付款成功`() {
+        for (status in listOf(1, 2, 3, 4, 5, 9)) {
+            val response = success(JSONObject().put("bill", JSONObject().put("id", "order-1").put("status", status)))
+            assertEquals(status, WalletResponseParser.rechargeStatus(response, "order-1"))
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `不接受另一笔充值订单的付款结果`() {
+        WalletResponseParser.rechargeStatus(success(JSONObject().put("bill",
+            JSONObject().put("id", "order-2").put("status", 3))), "order-1")
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `订单状态缺失不能当作已付款`() {
+        WalletResponseParser.rechargeStatus(success(JSONObject().put("bill", JSONObject().put("id", "order-1"))), "order-1")
+    }
+
     private fun success(data: Any): JSONObject = JSONObject()
         .put("code", 0)
         .put("data", data)

@@ -64,9 +64,12 @@ public class WaterWidgetProvider extends AppWidgetProvider {
             PendingIntent pi = PendingIntent.getActivity(context, 100 + widgetId, cfg,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             views.setOnClickPendingIntent(android.R.id.background, pi);
+            views.setOnClickPendingIntent(R.id.btn_start, pi);
+            views.setTextViewText(R.id.btn_start, "点击设置");
             views.setTextViewText(R.id.widget_status, "未配置 · 点击设置");
         } else {
             String did = WaterApi.getDid(context);
+            views.setTextViewText(R.id.btn_start, "启动设备");
             views.setOnClickPendingIntent(R.id.btn_start,
                     buildPI(context, widgetId, did));
             views.setTextViewText(R.id.widget_status,

@@ -27,6 +27,7 @@ public class IlifeApi {
     static final String GATEWAY = BuildConfig.API_GATEWAY;
     static final String CID = BuildConfig.API_CID;
     private static final String SIGN_SALT = BuildConfig.SIGN_SALT;
+    private static volatile long appServerTimeOffsetMillis;
     private static final String UA = "WaterWidget/" + BuildConfig.VERSION_NAME + " (Android)";
     private static final String DEVICE_LOGIN_REJECTED_MESSAGE =
             "设备登录信息未被接受，请检查是否填反或重新完成设备登录";
@@ -73,6 +74,7 @@ public class IlifeApi {
     public static void captcha(final String s, final ImgCallback cb) {
         new Thread(() -> {
             HttpURLConnection c = null;
+            final byte[] result;
             try {
                 String u = GATEWAY + "/captcha/?s=" + URLEncoder.encode(s, "UTF-8")
                         + "&r=" + System.currentTimeMillis();
@@ -86,24 +88,29 @@ public class IlifeApi {
                 byte[] buf = new byte[4096];
                 int n;
                 while ((n = is.read(buf)) > 0) out.write(buf, 0, n);
-                cb.onResult(out.toByteArray(), null);
-            } catch (Exception e) {
+                result = out.toByteArray();
+            } catch (java.io.IOException e) {
                 cb.onResult(null, e.getMessage());
+                return;
             } finally {
                 if (c != null) c.disconnect();
             }
+            cb.onResult(result, null);
         }).start();
     }
 
     public static void sendSms(final String phone, final String graphCode, final String s,
-                               final JsonCallback cb) {
+                               final boolean asApp, final JsonCallback cb) {
         JSONObject body = new JSONObject();
         try {
             body.put("un", phone);
             body.put("authCode", graphCode);
             body.put("s", s);
-        } catch (Exception ignored) {}
-        post("/acc/login/code", body, null, cb);
+        } catch (JSONException e) {
+            throw new IllegalStateException("无法创建短信请求", e);
+        }
+        if (asApp) requestApp("POST", "/acc/login/code", body, null, "3.1.9", cb);
+        else post("/acc/login/code", body, null, cb);
     }
 
     public static void login(final String phone, final String smsCode, final JsonCallback cb) {
@@ -117,20 +124,22 @@ public class IlifeApi {
      */
     public static void login(final String phone, final String smsCode,
                              final boolean asApp, final JsonCallback cb) {
-        JSONObject body = new JSONObject();
-        try {
-            body.put("openCode", "");
-            body.put("authCode", smsCode);
-            body.put("un", phone);
-            body.put("cid", CID);
-        } catch (Exception ignored) {}
-        final String appType = asApp ? "1,1" : "1,5";
         new Thread(() -> {
             try {
-                String resp = httpRawApp("POST", GATEWAY + "/acc/login",
-                        body.toString(), null, appType);
+                JSONObject body = new JSONObject();
+                body.put("authCode", smsCode);
+                body.put("un", phone);
+                String url = GATEWAY + "/acc/login";
+                if (asApp) {
+                    url += "?sign=" + Signer.signAppLogin(phone, smsCode, BuildConfig.APP_SIGN_SALT);
+                } else {
+                    body.put("openCode", "");
+                    body.put("cid", CID);
+                }
+                String resp = httpRawApp("POST", url, body.toString(), null,
+                        asApp ? "1,1" : "1,5", asApp ? "3.1.9" : "2.0.83");
                 cb.onResult(new JSONObject(resp), null);
-            } catch (Exception e) {
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
             }
         }).start();
@@ -151,14 +160,42 @@ public class IlifeApi {
 
     /** 用指定 token 获取任务列表（用于双平台合并）。 */
     public static void missionLstWithToken(final String token, final JsonCallback cb) {
+        missionLstWithToken(token, false, cb);
+    }
+
+    public static void missionLstWithToken(final String token, final boolean useApp, final JsonCallback cb) {
         new Thread(() -> {
             try {
-                String body = httpRaw("GET", GATEWAY + "/acc/score/mission-lst", null, token);
+                String body = httpRawApp("GET", GATEWAY + "/acc/score/mission-lst", null, token,
+                        useApp ? "1,1" : "1,5", useApp ? "3.1.9" : "2.0.178");
                 cb.onResult(new JSONObject(body), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
             }
         }).start();
+    }
+
+    /** 执行任务前，使用独立积分接口更新完成次数及累计积分。 */
+    public static void taskDataWithToken(final String token, final boolean useApp, final JsonCallback cb) {
+        missionLstWithToken(token, useApp, (missions, err) -> {
+            if (missions == null || missions.optInt("code", -999) != 0) {
+                cb.onResult(missions, err);
+                return;
+            }
+            accountScoreWithToken(token, useApp, (score, scoreErr) -> {
+                if (score == null || score.optInt("code", -999) != 0) {
+                    cb.onResult(score, scoreErr);
+                    return;
+                }
+                try {
+                    missions.getJSONObject("data").put("accScoreRsp", score.getJSONObject("data"));
+                } catch (JSONException e) {
+                    cb.onResult(null, e.getMessage());
+                    return;
+                }
+                cb.onResult(missions, null);
+            });
+        });
     }
 
     /** 获取积分明细（用于校验任务是否已完成）。 */
@@ -169,10 +206,43 @@ public class IlifeApi {
     /** 用指定 token 获取账户信息（uid/eid/手机号）。 */
     public static void viewInfoWithToken(final String token, final JsonCallback cb) {
         new Thread(() -> {
+            final JSONObject result;
             try {
                 String body = httpRaw("GET", GATEWAY + "/acc/view-info", null, token);
-                cb.onResult(new JSONObject(body), null);
-            } catch (Exception e) {
+                result = new JSONObject(body);
+            } catch (java.io.IOException | JSONException e) {
+                cb.onResult(null, e.getMessage());
+                return;
+            }
+            cb.onResult(result, null);
+        }).start();
+    }
+
+    /** 只读检查 App 会话；不轮换或覆盖本地登录信息。 */
+    public static void accountStatWithToken(final String appToken, final String uid, final JsonCallback cb) {
+        new Thread(() -> {
+            try {
+                String effectiveUid = uid;
+                if (effectiveUid == null || effectiveUid.isEmpty()) {
+                    JSONObject info = new JSONObject(httpRawApp("GET", GATEWAY + "/acc/view-info",
+                            null, appToken, "1,1", "3.1.9"));
+                    if (info.optInt("code", -999) != 0) {
+                        cb.onResult(info, null);
+                        return;
+                    }
+                    JSONObject data = info.optJSONObject("data");
+                    effectiveUid = data != null ? data.optString("id", "") : "";
+                    if (effectiveUid.isEmpty()) {
+                        cb.onResult(null, "账号信息未完整返回，请重试");
+                        return;
+                    }
+                }
+                String signature = Signer.signApp("", appToken, effectiveUid, BuildConfig.APP_SIGN_SALT,
+                        System.currentTimeMillis() + appServerTimeOffsetMillis);
+                String response = httpRawApp("GET", GATEWAY + "/acc/stat?sign=" + signature,
+                        null, appToken, "1,1", "3.1.9");
+                cb.onResult(new JSONObject(response), null);
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
             }
         }).start();
@@ -196,7 +266,7 @@ public class IlifeApi {
                 try {
                     String body = httpRawApp("GET", GATEWAY + request[1], null, token, request[2]);
                     result.put(request[0], new JSONObject(body));
-                } catch (Exception e) {
+                } catch (java.io.IOException | JSONException e) {
                     if (firstError == null) firstError = e.getMessage();
                 }
             }
@@ -207,31 +277,25 @@ public class IlifeApi {
     /** 用指定 token 获取积分明细。 */
     public static void scoreLstWithToken(final String token, final JsonCallback cb) {
         new Thread(() -> {
+            final JSONObject result;
             try {
                 String body = httpRaw("GET", GATEWAY + "/acc/score/score-lst?page=0&size=200&hasCount=1", null, token);
-                cb.onResult(new JSONObject(body), null);
-            } catch (Exception e) {
+                result = new JSONObject(body);
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
+                return;
             }
+            cb.onResult(result, null);
         }).start();
     }
 
     /** 用设备控制登录信息获取最近账单；type=91 为设备消费。 */
     public static void billListWithToken(final String token, final JsonCallback cb) {
-        new Thread(() -> {
-            try {
-                String body = httpRawApp(
-                        "GET",
-                        GATEWAY + "/bill/lst-owner?page=0&size=20",
-                        null,
-                        token,
-                        "1,1"
-                );
-                cb.onResult(new JSONObject(body), null);
-            } catch (Exception e) {
-                cb.onResult(null, e.getMessage());
-            }
-        }).start();
+        billListWithToken(token, 0, cb);
+    }
+
+    public static void billListWithToken(final String token, final int page, final JsonCallback cb) {
+        requestApp("GET", "/bill/lst-owner?page=" + page + "&size=20", null, token, cb);
     }
 
     /** 使用设备控制登录信息获取账户钱包。 */
@@ -242,6 +306,18 @@ public class IlifeApi {
     /** 使用设备登录信息读取可用积分。 */
     public static void accountScoreWithToken(final String appToken, final JsonCallback cb) {
         requestApp("GET", "/acc/score/acc-score", null, appToken, cb);
+    }
+
+    public static void accountScoreWithToken(final String token, final boolean useApp, final JsonCallback cb) {
+        new Thread(() -> {
+            try {
+                String body = httpRawApp("GET", GATEWAY + "/acc/score/acc-score", null, token,
+                        useApp ? "1,1" : "1,5", useApp ? "3.1.9" : "2.0.178");
+                cb.onResult(new JSONObject(body), null);
+            } catch (java.io.IOException | org.json.JSONException e) {
+                cb.onResult(null, e.getMessage());
+            }
+        }).start();
     }
 
     /** 兑换仅提交一次；网络结果不明确时由调用方核验，不自动重试。 */
@@ -305,19 +381,21 @@ public class IlifeApi {
 
     /** 用指定 token 执行积分任务（用于双平台合并）。 */
     public static void scoreSendWithToken(final String token, final String uid,
-                                          final String adId, final JsonCallback cb) {
+                                          final String adId, final int score, final boolean useApp, final JsonCallback cb) {
         new Thread(() -> {
             try {
                 String effectiveUid = uid;
                 if (effectiveUid == null || effectiveUid.isEmpty()) {
                     effectiveUid = fetchUidSync(token);
                 }
-                final String sg = sign(adId, token, effectiveUid != null ? effectiveUid : "");
-                String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=true";
                 JSONObject body = new JSONObject();
                 body.put("adId", adId);
                 body.put("type", 101);
-                String resp = httpRaw("POST", url, body.toString(), token);
+                if (useApp) {
+                    body.put("addScore", score);
+                    body.put("addScoreType", "1705776998".equals(adId) ? 2 : 4);
+                }
+                String resp = postScore(token, effectiveUid, adId, body, useApp);
                 cb.onResult(new JSONObject(resp), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
@@ -327,20 +405,22 @@ public class IlifeApi {
 
     /** 每日签到。weekDay: 1=周一...7=周日, signAdId: 签到adId(通常为"DAILY_CHECK_IN")。 */
     public static void scoreSendSignIn(final String token, final String uid,
-                                       final int weekDay, final String signAdId,
-                                       final JsonCallback cb) {
+                                       final int weekDay, final String signAdId, final int score,
+                                       final boolean useApp, final JsonCallback cb) {
         new Thread(() -> {
             try {
                 String effectiveUid = uid;
                 if (effectiveUid == null || effectiveUid.isEmpty()) {
                     effectiveUid = fetchUidSync(token);
                 }
-                final String sg = sign(signAdId, token, effectiveUid != null ? effectiveUid : "");
-                String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=true";
                 JSONObject body = new JSONObject();
-                body.put("weekDay", weekDay);
+                body.put(useApp ? "weekday" : "weekDay", weekDay);
+                if (useApp) {
+                    body.put("addScore", score);
+                    body.put("addScoreType", 1);
+                }
                 body.put("adId", signAdId);
-                String resp = httpRaw("POST", url, body.toString(), token);
+                String resp = postScore(token, effectiveUid, signAdId, body, useApp);
                 cb.onResult(new JSONObject(resp), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
@@ -365,24 +445,37 @@ public class IlifeApi {
                 // 同步取 uid
                 uid = fetchUidSync(acc.token);
                 if (uid != null && !uid.isEmpty()) {
-                    acc.uid = uid;
-                    AccountStore.updateCurrent(ctx, acc);
+                    final String resolvedUid = uid;
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(
+                            () -> AccountStore.updateUid(ctx, acc.phone, acc.token, resolvedUid));
                 }
             }
-            final String sg = sign(adId, acc.token, uid != null ? uid : "");
-            String url = GATEWAY + "/acc/score/score-send?sign=" + sg + "&s=true";
             JSONObject body = new JSONObject();
             try {
                 body.put("adId", adId);
                 body.put("type", 101);
             } catch (Exception ignored) {}
             try {
-                String resp = httpRaw("POST", url, body.toString(), acc.token);
+                String resp = postScore(acc.token, uid, adId, body, false);
                 cb.onResult(new JSONObject(resp), null);
             } catch (Exception e) {
                 cb.onResult(null, e.getMessage());
             }
         }).start();
+    }
+
+    private static String postScore(String token, String uid, String adId,
+                                    JSONObject body, boolean useApp) throws Exception {
+        if (useApp) {
+            String signature = Signer.signApp(adId, token, uid, BuildConfig.APP_SIGN_SALT,
+                    System.currentTimeMillis() + appServerTimeOffsetMillis);
+            String url = GATEWAY + "/acc/score/score-send?sign=" + signature + "&s=1";
+            return httpRawApp("POST", url, body.toString(), token, "1,1", "3.1.9");
+        }
+        String signature = Signer.signMini(adId, token, uid, BuildConfig.MINI_SIGN_SALT,
+                System.currentTimeMillis());
+        return httpRawApp("POST", GATEWAY + "/acc/score/score-send?sign=" + signature,
+                body.toString(), token, "1,5", "2.0.178");
     }
 
     /** 同步获取 uid（从 view-info）。 */
@@ -400,18 +493,18 @@ public class IlifeApi {
 
     // ====== 设备 ======
 
-    public static void master(Context ctx, final JsonCallback cb) {
+    public static void masterWithToken(final String token, final boolean useApp, final JsonCallback cb) {
         new Thread(() -> {
-            Account acc = AccountStore.getCurrent(ctx);
-            boolean useApp = acc != null && acc.hasAppToken();
-            String token = acc == null ? "" : (useApp ? acc.appToken : acc.token);
             String appType = useApp ? "1,1" : "1,5";
+            final JSONObject result;
             try {
                 String body = httpRawApp("GET", GATEWAY + "/ui/app/master", null, token, appType);
-                cb.onResult(new JSONObject(body), null);
-            } catch (Exception e) {
+                result = new JSONObject(body);
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
+                return;
             }
+            cb.onResult(result, null);
         }).start();
     }
 
@@ -429,34 +522,36 @@ public class IlifeApi {
             String appType = useApp ? "1,1" : "1,5";
             String url = GATEWAY + "/dev/start?did=" + enc(did)
                     + "&upgrade=true&ptype=91&rcp=false";
+            final JSONObject json;
             try {
-                String body = httpRawApp("GET", url, null, token, appType);
-                JSONObject json = new JSONObject(body);
-                int code = json.optInt("code", -999);
-                String msg = json.optString("msg", "");
-                if (code == 0) {
-                    cb.onResult("成功 ✓", null);
-                } else if (code == -99) {
-                    cb.onResult(null, "TOKEN_EXPIRED");
-                } else if (code == -21) {
-                    cb.onResult(null, useApp ? DEVICE_LOGIN_REJECTED_MESSAGE : "需要设备控制登录信息，请先在账户中添加");
-                } else if (code == -88) {
-                    cb.onResult(null, "未签约代扣协议，请在服务端完成签约后再使用");
-                } else if (code == -87) {
-                    cb.onResult(null, "签约已过期，请重新签约");
-                } else if (code == -52) {
-                    cb.onResult(null, "账户欠费，请充值后使用");
-                } else if (code == -20) {
-                    cb.onResult(null, "未绑定一卡通账号，请先完成账户绑定");
-                } else if (code == -19) {
-                    cb.onResult(null, "设备准备中，请稍后");
-                } else if (code == -82) {
-                    cb.onResult(null, "需要支付");
-                } else {
-                    cb.onResult(null, msg.isEmpty() ? "code=" + code : msg);
-                }
-            } catch (Exception e) {
+                String body = httpRawApp("GET", url, null, token, appType, useApp ? "3.1.9" : "2.0.83");
+                json = new JSONObject(body);
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
+                return;
+            }
+            int code = json.optInt("code", -999);
+            String msg = json.optString("msg", "");
+            if (code == 0) {
+                cb.onResult("成功 ✓", null);
+            } else if (code == -99) {
+                cb.onResult(null, "TOKEN_EXPIRED");
+            } else if (code == -21) {
+                cb.onResult(null, useApp ? DEVICE_LOGIN_REJECTED_MESSAGE : "需要设备控制登录信息，请先在账户中添加");
+            } else if (code == -88) {
+                cb.onResult(null, "未签约代扣协议，请在服务端完成签约后再使用");
+            } else if (code == -87) {
+                cb.onResult(null, "签约已过期，请重新签约");
+            } else if (code == -52) {
+                cb.onResult(null, "账户欠费，请充值后使用");
+            } else if (code == -20) {
+                cb.onResult(null, "未绑定一卡通账号，请先完成账户绑定");
+            } else if (code == -19) {
+                cb.onResult(null, "设备准备中，请稍后");
+            } else if (code == -82) {
+                cb.onResult(null, "需要支付");
+            } else {
+                cb.onResult(null, msg.isEmpty() ? "code=" + code : msg);
             }
         }).start();
     }
@@ -476,72 +571,72 @@ public class IlifeApi {
             }
             String url = GATEWAY + "/dev/start?did=" + enc(did)
                     + "&upgrade=true&ptype=91&rcp=false";
+            final JSONObject json;
             try {
-                String body = httpRawApp("GET", url, null, appToken, "1,1");
-                JSONObject json = new JSONObject(body);
-                int code = json.optInt("code", -999);
-                String msg = json.optString("msg", "");
-                if (code == 0) {
-                    cb.onResult("成功 ✓", null);
-                } else if (code == -99) {
-                    cb.onResult(null, "TOKEN_EXPIRED");
-                } else if (code == -21) {
-                    cb.onResult(null, DEVICE_LOGIN_REJECTED_MESSAGE);
-                } else if (code == -88) {
-                    cb.onResult(null, "未签约代扣协议，请在服务端完成签约后再使用");
-                } else if (code == -87) {
-                    cb.onResult(null, "签约已过期，请重新签约");
-                } else if (code == -52) {
-                    cb.onResult(null, "账户欠费，请充值后使用");
-                } else if (code == -20) {
-                    cb.onResult(null, "未绑定一卡通账号，请先完成账户绑定");
-                } else if (code == -19) {
-                    cb.onResult(null, "设备准备中，请稍后");
-                } else if (code == -82) {
-                    cb.onResult(null, "需要支付");
-                } else {
-                    cb.onResult(null, msg.isEmpty() ? "code=" + code : msg);
-                }
-            } catch (Exception e) {
+                String body = httpRawApp("GET", url, null, appToken, "1,1", "3.1.9");
+                json = new JSONObject(body);
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
+                return;
+            }
+            int code = json.optInt("code", -999);
+            String msg = json.optString("msg", "");
+            if (code == 0) {
+                cb.onResult("成功 ✓", null);
+            } else if (code == -99) {
+                cb.onResult(null, "TOKEN_EXPIRED");
+            } else if (code == -21) {
+                cb.onResult(null, DEVICE_LOGIN_REJECTED_MESSAGE);
+            } else if (code == -88) {
+                cb.onResult(null, "未签约代扣协议，请在服务端完成签约后再使用");
+            } else if (code == -87) {
+                cb.onResult(null, "签约已过期，请重新签约");
+            } else if (code == -52) {
+                cb.onResult(null, "账户欠费，请充值后使用");
+            } else if (code == -20) {
+                cb.onResult(null, "未绑定一卡通账号，请先完成账户绑定");
+            } else if (code == -19) {
+                cb.onResult(null, "设备准备中，请稍后");
+            } else if (code == -82) {
+                cb.onResult(null, "需要支付");
+            } else {
+                cb.onResult(null, msg.isEmpty() ? "code=" + code : msg);
             }
         }).start();
     }
 
-    /** 结束出水。 */
     public static void devEnd(Context ctx, final String did, final TextCallback cb) {
-        new Thread(() -> {
-            Account acc = AccountStore.getCurrent(ctx);
-            if (acc == null || (!acc.hasToken() && !acc.hasAppToken())) {
-                cb.onResult(null, "未登录");
+        Account account = AccountStore.getCurrent(ctx);
+        if (account == null || !account.hasAppToken()) {
+            cb.onResult(null, "请先完成设备登录");
+            return;
+        }
+        devEndWithToken(account.appToken, did, cb);
+    }
+
+    /** 使用调用时冻结的设备登录信息结束使用，不自动重试。 */
+    public static void devEndWithToken(final String appToken, final String did, final TextCallback cb) {
+        requestApp("GET", "/dev/end?did=" + enc(did) + "&rcp=false", null, appToken, "3.1.9", (json, err) -> {
+            if (json == null) {
+                cb.onResult(null, "未能确认停止结果，请检查设备状态后再操作");
                 return;
             }
-            boolean useApp = acc.hasAppToken();
-            String token = useApp ? acc.appToken : acc.token;
-            String appType = useApp ? "1,1" : "1,5";
-            String url = GATEWAY + "/dev/end?did=" + enc(did);
-            try {
-                String body = httpRawApp("GET", url, null, token, appType);
-                JSONObject json = new JSONObject(body);
-                int code = json.optInt("code", -999);
-                if (code == 0) {
-                    cb.onResult("已停止 ✓", null);
-                } else if (code == -99) {
-                    cb.onResult(null, "TOKEN_EXPIRED");
-                } else {
-                    cb.onResult(null, "code=" + code);
-                }
-            } catch (Exception e) {
-                cb.onResult(null, e.getMessage());
+            int code = json.optInt("code", -999);
+            if (code == 0) {
+                cb.onResult("停止请求已发送，请等待设备结束与账单结算", null);
+            } else if (code == -99) {
+                cb.onResult(null, TokenValidity.Companion.expiredMessage(json, true));
+            } else {
+                cb.onResult(null, json.optString("msg", "停止失败（" + code + "）"));
             }
-        }).start();
+        });
     }
 
     /** 添加或移除账户收藏设备。remove=true 表示移除。 */
     public static void deviceFavorite(Context ctx, final String did, final boolean remove,
                                       final TextCallback cb) {
+        Account acc = AccountStore.getCurrent(ctx);
         new Thread(() -> {
-            Account acc = AccountStore.getCurrent(ctx);
             if (acc == null || (!acc.hasToken() && !acc.hasAppToken())) {
                 cb.onResult(null, "未登录");
                 return;
@@ -549,20 +644,22 @@ public class IlifeApi {
             boolean useApp = acc.hasAppToken();
             String token = useApp ? acc.appToken : acc.token;
             String appType = useApp ? "1,1" : "1,5";
-            String url = GATEWAY + "/dev/favo?did=" + enc(did) + "&remove=" + (remove ? "1" : "0");
+            String url = GATEWAY + "/dev/favo?did=" + enc(did) + "&remove=" + remove;
+            final JSONObject json;
             try {
-                JSONObject json = new JSONObject(httpRawApp("GET", url, null, token, appType));
-                int code = json.optInt("code", -999);
-                if (code == 0) {
-                    cb.onResult(remove ? "已移除" : "已添加", null);
-                } else if (code == -99) {
-                    cb.onResult(null, "TOKEN_EXPIRED");
-                } else {
-                    String msg = json.optString("msg", "");
-                    cb.onResult(null, msg.isEmpty() ? "code=" + code : msg);
-                }
-            } catch (Exception e) {
+                json = new JSONObject(httpRawApp("GET", url, null, token, appType));
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
+                return;
+            }
+            int code = json.optInt("code", -999);
+            if (code == 0) {
+                cb.onResult(remove ? "已移除" : "已添加", null);
+            } else if (code == -99) {
+                cb.onResult(null, "TOKEN_EXPIRED");
+            } else {
+                String msg = json.optString("msg", "");
+                cb.onResult(null, msg.isEmpty() ? "code=" + code : msg);
             }
         }).start();
     }
@@ -573,63 +670,88 @@ public class IlifeApi {
         new Thread(() -> {
             Account acc = AccountStore.getCurrent(ctx);
             String token = acc != null ? acc.token : "";
+            final JSONObject result;
             try {
                 String body = httpRaw("GET", GATEWAY + path, null, token);
-                cb.onResult(new JSONObject(body), null);
-            } catch (Exception e) {
+                result = new JSONObject(body);
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
+                return;
             }
+            cb.onResult(result, null);
         }).start();
     }
 
     private static void post(final String path, final JSONObject body, final String token,
                              final JsonCallback cb) {
         new Thread(() -> {
+            final JSONObject result;
             try {
                 String resp = httpRaw("POST", GATEWAY + path,
                         body != null ? body.toString() : null, token);
-                cb.onResult(new JSONObject(resp), null);
-            } catch (Exception e) {
+                result = new JSONObject(resp);
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
+                return;
             }
+            cb.onResult(result, null);
         }).start();
     }
 
     private static void requestApp(final String method, final String path,
                                    final JSONObject body, final String appToken,
                                    final JsonCallback cb) {
+        requestApp(method, path, body, appToken, "3.1.9", cb);
+    }
+
+    private static void requestApp(final String method, final String path,
+                                   final JSONObject body, final String appToken,
+                                   final String version, final JsonCallback cb) {
         new Thread(() -> {
+            final JSONObject result;
             try {
                 String response = httpRawApp(
                         method,
                         GATEWAY + path,
                         body != null ? body.toString() : null,
                         appToken,
-                        "1,1"
+                        "1,1",
+                        version
                 );
-                cb.onResult(new JSONObject(response), null);
-            } catch (Exception e) {
+                result = new JSONObject(response);
+            } catch (java.io.IOException | JSONException e) {
                 cb.onResult(null, e.getMessage());
+                return;
             }
+            cb.onResult(result, null);
         }).start();
     }
 
     private static String httpRaw(String method, String urlStr, String body, String token)
-            throws Exception {
+            throws java.io.IOException {
         return httpRawApp(method, urlStr, body, token, "1,5");
     }
 
     /** 同 httpRaw，但可指定 ApplicationType。 */
     private static String httpRawApp(String method, String urlStr, String body,
-                                     String token, String appType) throws Exception {
+                                     String token, String appType) throws java.io.IOException {
+        return httpRawApp(method, urlStr, body, token, appType,
+                "1,1".equals(appType) ? "3.1.9" : "2.0.83");
+    }
+
+    private static String httpRawApp(String method, String urlStr, String body,
+                                     String token, String appType, String version) throws java.io.IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(urlStr).openConnection();
         try {
             c.setRequestMethod(method);
             c.setConnectTimeout(15000);
             c.setReadTimeout(15000);
-            c.setRequestProperty("User-Agent", UA);
+            c.setRequestProperty("User-Agent", "1,1".equals(appType) && "3.1.9".equals(version)
+                    ? "Android_ilife798_3.1.9" : UA);
             c.setRequestProperty("Content-Type", "application/json");
             c.setRequestProperty("ApplicationType", appType);
+            // 服务端 API 版本，与本应用版本独立；与项目青龙脚本保持一致。
+            c.setRequestProperty("VersionCode", version);
             c.setRequestProperty("Accept-Language", "zh-Hans-CN;q=1");
             if (token != null && !token.isEmpty()) {
                 c.setRequestProperty("Authorization", token);
@@ -642,6 +764,9 @@ public class IlifeApi {
                 os.close();
             }
             int http = c.getResponseCode();
+            if ("1,1".equals(appType) && "3.1.9".equals(version) && c.getDate() > 0L) {
+                appServerTimeOffsetMillis = c.getDate() - System.currentTimeMillis();
+            }
             BufferedReader rd = new BufferedReader(new InputStreamReader(
                     http >= 400 ? c.getErrorStream() : c.getInputStream(), "UTF-8"));
             StringBuilder sb = new StringBuilder();

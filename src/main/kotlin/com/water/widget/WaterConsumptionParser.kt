@@ -8,8 +8,7 @@ import kotlin.math.roundToInt
 /**
  * 从积分流水中识别一次饮水消费。
  *
- * 服务端当前没有返回可靠的出水毫升数字，因此水量继续沿用应用统计页的换算规则：
- * 160 积分约等于 500 ml。
+ * 服务端当前没有返回可靠的出水毫升数字，水量仅按用户设置的比例估算。
  */
 data class WaterConsumption(
     val spentScore: Int,
@@ -27,16 +26,13 @@ data class WaterConsumption(
     val moneyText: String
         get() = "¥${String.format(Locale.CHINA, "%.2f", paymentYuan ?: spentScore / 1000.0)}"
 
-    val estimatedWaterText: String
-        get() {
-            val millilitres = scoreEquivalent * 500 / 160
-            return if (millilitres >= 1000) {
-                String.format(Locale.CHINA, "%.1f L", millilitres / 1000.0)
-            } else {
-                val roundedMillilitres = (millilitres + 5) / 10 * 10
-                "$roundedMillilitres ml"
-            }
-        }
+    val completionTitle: String
+        get() = if (scoreEquivalent == 0) "设备使用已结束" else "接水完成"
+
+    fun completionText(estimate: WaterEstimate = WaterEstimate()): String =
+        if (scoreEquivalent == 0) "本次未产生费用"
+        else if (estimate.visible) "本次消费 $moneyText · 水量约 ${estimate.waterText(scoreEquivalent)}"
+        else "本次消费 $moneyText"
 }
 
 object WaterBillParser {
@@ -53,6 +49,39 @@ object WaterBillParser {
         }
     }
 
+    fun candidateIds(
+        billJson: JSONObject?,
+        sinceMillis: Long,
+        excludedRecordKeys: Set<String>,
+        expectedDeviceId: String
+    ): List<String> {
+        if (billJson == null || billJson.optInt("code", -999) != 0) return emptyList()
+        val records = WaterRecordFields.readRecords(billJson) ?: return emptyList()
+        return (0 until records.length()).mapNotNull(records::optJSONObject)
+            .filter { isCompletedWaterBill(it) }
+            .filter { WaterRecordFields.recordKey("bill", it, it.optJSONObject("data")) !in excludedRecordKeys }
+            .filter { WaterRecordFields.normalizeEpochMillis(it.optLong("utime", it.optLong("ctime", 0L))) >= sinceMillis }
+            .filter {
+                val deviceId = WaterRecordFields.readDeviceId(it, it.optJSONObject("data"))
+                expectedDeviceId.isBlank() || deviceId == null || deviceId == expectedDeviceId
+            }
+            .sortedByDescending { it.optLong("utime", it.optLong("ctime", 0L)) }
+            .mapNotNull { it.optString("id").takeIf(String::isNotBlank) }
+            .distinct()
+    }
+
+    fun fromDetail(response: JSONObject?, expectedBillId: String, expectedDeviceId: String): WaterConsumption? {
+        if (response == null || response.optInt("code", -999) != 0) return null
+        val bill = response.optJSONObject("data")?.optJSONObject("bill") ?: return null
+        if (bill.optString("id") != expectedBillId) return null
+        return latestSince(JSONObject().put("code", 0).put("data", org.json.JSONArray().put(bill)), 0L, expectedDeviceId)
+    }
+
+    private fun isCompletedWaterBill(record: JSONObject): Boolean =
+        record.optInt("type", Int.MIN_VALUE) == 91 &&
+            record.optInt("status", Int.MIN_VALUE) == 3 &&
+            (!record.has("cata") || record.optInt("cata") == 6)
+
     fun latestSince(
         billJson: JSONObject?,
         sinceMillis: Long,
@@ -64,9 +93,7 @@ object WaterBillParser {
         var latest: WaterConsumption? = null
         for (index in 0 until records.length()) {
             val record = records.optJSONObject(index) ?: continue
-            if (record.optInt("type", Int.MIN_VALUE) != 91) continue
-            // 订单 3 表示已付款；待确认、失败和取消都不能作为接水完成信号。
-            if (record.optInt("status", Int.MIN_VALUE) != 3) continue
+            if (!isCompletedWaterBill(record)) continue
             val recordKey = WaterRecordFields.recordKey(
                 "bill",
                 record,
@@ -77,8 +104,12 @@ object WaterBillParser {
             val createdAt = WaterRecordFields.normalizeEpochMillis(record.optLong("ctime", 0L))
             val occurredAt = updatedAt.takeIf { it > 0L } ?: createdAt
             if (occurredAt < sinceMillis) continue
-            val payment = record.optDouble("payment", 0.0)
-            if (!payment.isFinite() || payment <= 0.0) continue
+            // 已核验：积分抵扣记录在详情的 promo.type=4 / discount，列表 payment 可以为零。
+            val scoreDiscount = if (record.optJSONObject("promo")?.optInt("type") == 4) {
+                record.optDouble("discount", Double.NaN)
+            } else 0.0
+            val payment = record.optDouble("payment", Double.NaN) + scoreDiscount
+            if (!payment.isFinite() || payment < 0.0) continue
 
             val explicitDeviceId = WaterRecordFields.readDeviceId(record, record.optJSONObject("data"))
             if (expectedDeviceId.isNotBlank() &&
@@ -150,7 +181,8 @@ object WaterConsumptionParser {
                 latest = WaterConsumption(
                     spentScore = amount,
                     occurredAt = occurredAt,
-                    historyKey = WaterRecordFields.recordKey("score", record, data)
+                    historyKey = data?.optString("sn")?.takeIf(String::isNotBlank)
+                        ?.let { "bill:id:$it" } ?: WaterRecordFields.recordKey("score", record, data)
                 )
             }
         }
@@ -190,7 +222,7 @@ object WaterConsumptionParser {
 
 private object WaterRecordFields {
     private val deviceKeys = arrayOf("did", "deviceId", "device_id")
-    private val recordIdKeys = arrayOf("id", "billId", "bill_id", "orderId", "order_id", "serialNo")
+    private val recordIdKeys = arrayOf("id", "billId", "bill_id", "orderId", "order_id", "serialNo", "sn")
 
     fun readRecords(root: JSONObject): org.json.JSONArray? {
         root.optJSONArray("data")?.let { return it }
@@ -227,6 +259,7 @@ private object WaterRecordFields {
     }
 
     fun readDeviceId(record: JSONObject, data: JSONObject?): String? {
+        record.optJSONObject("dev")?.optString("id")?.takeIf(String::isNotBlank)?.let { return it }
         for (key in deviceKeys) {
             record.optString(key, "").trim().takeIf(String::isNotEmpty)?.let { return it }
         }

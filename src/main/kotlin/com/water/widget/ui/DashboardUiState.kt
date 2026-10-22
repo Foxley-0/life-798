@@ -1,6 +1,8 @@
 package com.water.widget.ui
 
 import com.water.widget.Account
+import com.water.widget.TokenValidity
+import com.water.widget.WaterEstimate
 import org.json.JSONObject
 import java.util.Calendar
 import java.util.Locale
@@ -15,7 +17,8 @@ data class DashboardSummaryUiState(
     val hasDevices: Boolean,
     val accountCount: Int,
     val devices: List<DeviceUiState> = emptyList(),
-    val usage: WaterUsageUiState = WaterUsageUiState()
+    val usage: WaterUsageUiState = WaterUsageUiState(),
+    val appLoginStatusText: String = "未完成"
 )
 
 data class DeviceUiState(
@@ -30,7 +33,9 @@ data class WaterUsageUiState(
     val yearCostText: String = "--",
     val todayWaterText: String = "--",
     val monthWaterText: String = "--",
-    val yearWaterText: String = "--"
+    val yearWaterText: String = "--",
+    val syncNote: String = "仅统计已获取的记录",
+    val showWaterEstimate: Boolean = true
 )
 
 data class DashboardAccountUiState(
@@ -49,12 +54,16 @@ object DashboardUiStateFactory {
         validScore: Int? = null,
         scoreJson: JSONObject? = null,
         usageOverride: WaterUsageUiState? = null,
-        walletBalance: Double? = null
+        walletBalance: Double? = null,
+        waterEstimate: WaterEstimate = WaterEstimate(),
+        walletMessage: String? = null,
+        appStatus: TokenValidity = TokenValidity.UNCHECKED,
+        alipayStatus: TokenValidity = TokenValidity.UNCHECKED
     ): DashboardSummaryUiState {
         if (account == null) {
             return DashboardSummaryUiState(
                 accountTitle = "未登录",
-                accountSubtitle = "完成设备登录后即可使用设备",
+                accountSubtitle = "完成用水登录后即可使用设备",
                 scoreTitle = "--",
                 scoreSubtitle = "登录后查看积分与钱包",
                 hasAccount = false,
@@ -62,7 +71,7 @@ object DashboardUiStateFactory {
                 hasDevices = false,
                 accountCount = accountCount,
                 devices = emptyList(),
-                usage = WaterUsageUiState()
+                usage = WaterUsageUiState(showWaterEstimate = waterEstimate.visible)
             )
         }
 
@@ -73,19 +82,14 @@ object DashboardUiStateFactory {
         val hasDevices = account.hasDevices()
         return DashboardSummaryUiState(
             accountTitle = title,
-            accountSubtitle = when {
-                account.hasToken() && hasAppToken -> "设备与积分登录均已完成"
-                account.hasToken() -> "积分登录已完成 · 设备登录未完成"
-                hasAppToken -> "设备登录已完成 · 可补充积分登录"
-                else -> "两项登录均未完成"
-            },
+            accountSubtitle = loginSummary(account, appStatus, alipayStatus),
             scoreTitle = if (validScore != null && walletBalance != null) {
                 "≈¥" + String.format(Locale.CHINA, "%.2f", validScore / 1000.0 + walletBalance)
             } else "--",
             scoreSubtitle = listOf(
                 walletBalance?.let { "钱包 ¥" + String.format(Locale.CHINA, "%.2f", it) } ?: "钱包未获取",
                 validScore?.let { "积分 $it（≈" + moneyText(it) + "）" } ?: "积分未获取"
-            ).joinToString("  +  "),
+            ).joinToString("  +  ") + walletMessage?.let { "\n$it" }.orEmpty(),
             hasAccount = true,
             hasAppToken = hasAppToken,
             hasDevices = hasDevices,
@@ -97,13 +101,14 @@ object DashboardUiStateFactory {
                     isControlCenterDevice = id == account.selectedDeviceId()
                 )
             },
-            usage = usageOverride ?: usageFrom(scoreJson)
+            usage = usageOverride ?: usageFrom(scoreJson, waterEstimate),
+            appLoginStatusText = if (hasAppToken) appStatus.label else "未完成"
         )
     }
 
-    private fun usageFrom(scoreJson: JSONObject?): WaterUsageUiState {
-        if (scoreJson == null || scoreJson.optInt("code", -999) != 0) return WaterUsageUiState()
-        val records = scoreJson.optJSONArray("data") ?: return WaterUsageUiState()
+    private fun usageFrom(scoreJson: JSONObject?, estimate: WaterEstimate): WaterUsageUiState {
+        if (scoreJson == null || scoreJson.optInt("code", -999) != 0) return WaterUsageUiState(showWaterEstimate = estimate.visible)
+        val records = scoreJson.optJSONArray("data") ?: return WaterUsageUiState(showWaterEstimate = estimate.visible)
         val now = Calendar.getInstance()
         val today = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
@@ -132,9 +137,10 @@ object DashboardUiStateFactory {
             todayCostText = moneyText(todaySpend),
             monthCostText = moneyText(monthSpend),
             yearCostText = moneyText(yearSpend),
-            todayWaterText = waterText(todaySpend),
-            monthWaterText = waterText(monthSpend),
-            yearWaterText = waterText(yearSpend)
+            todayWaterText = estimate.waterText(todaySpend),
+            monthWaterText = estimate.waterText(monthSpend),
+            yearWaterText = estimate.waterText(yearSpend),
+            showWaterEstimate = estimate.visible
         )
     }
 
@@ -151,29 +157,24 @@ object DashboardUiStateFactory {
 
     private fun moneyText(score: Int): String = "¥${String.format(Locale.CHINA, "%.2f", score / 1000.0)}"
 
-    private fun waterText(score: Int): String {
-        val millilitres = score * 500 / 160
-        return when {
-            millilitres >= 1000 -> String.format(Locale.CHINA, "%.1f L", millilitres / 1000.0)
-            else -> "${(millilitres + 5) / 10 * 10} ml"
-        }
-    }
+    private fun loginSummary(account: Account, appStatus: TokenValidity, alipayStatus: TokenValidity): String =
+        "用水登录${if (account.hasAppToken()) appStatus.label else "未完成"} · " +
+            "积分登录${if (account.hasToken()) alipayStatus.label else "未完成"}"
 
-    fun accountsFrom(accounts: List<Account>, currentPhone: String?): List<DashboardAccountUiState> =
+    fun accountsFrom(
+        accounts: List<Account>,
+        currentPhone: String?,
+        loginStatus: (Account, Boolean) -> TokenValidity = { _, _ -> TokenValidity.UNCHECKED }
+    ): List<DashboardAccountUiState> =
         accounts.map { account ->
+            val appStatus = loginStatus(account, true)
+            val alipayStatus = loginStatus(account, false)
+            val summary = loginSummary(account, appStatus, alipayStatus)
             DashboardAccountUiState(
                 phone = account.phone.orEmpty(),
                 title = account.name?.takeIf { it.isNotBlank() } ?: account.phone?.takeIf { it.isNotBlank() } ?: "未命名账号",
-                subtitle = when {
-                    account.hasToken() && account.hasAppToken() -> "设备与积分登录均已完成"
-                    account.hasToken() -> "积分登录已完成 · 设备登录未完成"
-                    account.hasAppToken() -> "设备登录已完成 · 可补充积分登录"
-                    else -> "需要重新登录或补充登录信息"
-                },
-                tokenSummary = buildList {
-                    add(if (account.hasToken()) "积分登录已完成" else "积分登录未完成")
-                    add(if (account.hasAppToken()) "设备登录已完成" else "设备登录未完成")
-                }.joinToString(" · "),
+                subtitle = summary,
+                tokenSummary = summary,
                 deviceSummary = if (account.hasDevices()) "${account.rememberedDevices().size} 台设备" else "暂无设备",
                 isCurrent = account.phone == currentPhone
             )

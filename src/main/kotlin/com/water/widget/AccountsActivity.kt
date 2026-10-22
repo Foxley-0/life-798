@@ -17,16 +17,21 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
 import com.water.widget.ui.AccountCardState
 import com.water.widget.ui.AccountsScreen
 import com.water.widget.ui.TextEntryDialog
 import com.water.widget.ui.WaterTheme
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.launch
 
 class AccountsActivity : ComponentActivity() {
     private var accounts by mutableStateOf<List<AccountCardState>>(emptyList())
     private var dialog by mutableStateOf<DialogState?>(null)
+    private data class CheckedLogin(val token: String, val status: TokenValidity)
+    private val loginStates = mutableMapOf<Pair<String, Boolean>, CheckedLogin>()
+    private val pendingImports = mutableMapOf<String, Any>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,16 +50,21 @@ class AccountsActivity : ComponentActivity() {
                     onSetCurrent = { AccountStore.setCurrent(this, it); refresh(); toast("已切换当前账户") },
                     onSetAppToken = { phone -> dialog = DialogState.SetAppToken(phone) },
                     onRevealToken = { phone, app -> dialog = DialogState.Reveal(phone, app) },
-                    onDelete = { phone -> dialog = DialogState.Delete(phone) }
+                    onDelete = { phone -> dialog = DialogState.Delete(phone) },
+                    onCheckLogin = { phone -> AccountStore.get(this, phone)?.let(::checkLogins) },
+                    onRelogin = { phone, app -> login.launch(LoginActivity.reloginIntent(this, phone, app)) },
+                    onBack = { finish() }
                 )
                 RenderDialog()
             }
         }
+        lifecycleScope.launch { LoginStatusStore.changes.collect { refresh() } }
     }
 
     override fun onResume() {
         super.onResume()
         refresh()
+        AccountStore.list(this).forEach(::checkLogins)
     }
 
     @androidx.compose.runtime.Composable
@@ -62,23 +72,23 @@ class AccountsActivity : ComponentActivity() {
         when (val state = dialog) {
             DialogState.AddToken -> TextEntryDialog(
                 title = "手动添加登录信息",
-                message = "设备登录为必需项；积分登录可稍后补充。登录信息属于敏感内容，保存前会在线核验账户。",
+                message = "用水登录用于接水和钱包，积分登录可稍后添加。保存前会检查登录信息，请勿分享给他人。",
                 fields = listOf(
                     "手机号" to "",
-                    "积分登录（补充：支付宝端任务可获得更多积分）" to "",
-                    "设备登录（必需：设备、App 端任务与充值）" to ""
+                    "积分登录（支付宝，可选）" to "",
+                    "用水登录（App）" to ""
                 ),
-                sensitive = true,
+                sensitiveFields = setOf(1, 2),
                 onDismiss = { dialog = null },
                 onConfirm = { dialog = null; addByToken(it) }
             )
             is DialogState.SetAppToken -> {
                 val account = AccountStore.get(this, state.phone)
                 TextEntryDialog(
-                    title = "手动填写设备登录",
-                    message = "设备登录为必需项，用于设备启动、App 端积分任务与钱包充值。",
-                    fields = listOf("设备登录" to account?.appToken.orEmpty()),
-                    sensitive = true,
+                    title = "手动填写用水登录",
+                    message = "用于接水、钱包和 App 积分任务。保存前会检查是否属于当前账号。",
+                    fields = listOf("用水登录（App）" to account?.appToken.orEmpty()),
+                    sensitiveFields = setOf(0),
                     onDismiss = { dialog = null },
                     onConfirm = { values ->
                         dialog = null
@@ -93,7 +103,9 @@ class AccountsActivity : ComponentActivity() {
                 val token = if (state.app) account?.appToken.orEmpty() else account?.token.orEmpty()
                 AlertDialog(
                     onDismissRequest = { dialog = null },
-                    title = { Text(if (state.app) "设备登录" else "积分登录") },
+                    shape = com.water.widget.ui.WaterShapeTokens.prominent,
+                    containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
+                    title = { Text(if (state.app) "用水登录信息" else "积分登录信息") },
                     text = { Text("这是一段敏感登录信息，请勿发送给他人或粘贴到不可信应用。\n\n$token") },
                     confirmButton = { TextButton(onClick = { copySensitive(token); dialog = null }) { Text("复制登录信息") } },
                     dismissButton = { TextButton(onClick = { dialog = null }) { Text("关闭") } }
@@ -101,8 +113,10 @@ class AccountsActivity : ComponentActivity() {
             }
             is DialogState.Delete -> AlertDialog(
                 onDismissRequest = { dialog = null },
+                shape = com.water.widget.ui.WaterShapeTokens.prominent,
+                containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
                 title = { Text("删除账户") },
-                text = { Text("确认删除 ${state.phone}？此操作会移除本机保存的 Token 和设备分配。") },
+                text = { Text("确认删除 ${state.phone}？将移除本机保存的登录信息和设备，不影响官方账号。") },
                 confirmButton = { TextButton(onClick = { AccountStore.remove(this, state.phone); dialog = null; refresh(); toast("已删除") }) { Text("删除") } },
                 dismissButton = { TextButton(onClick = { dialog = null }) { Text("取消") } }
             )
@@ -119,11 +133,36 @@ class AccountsActivity : ComponentActivity() {
                 current = account.phone == current,
                 alipayToken = account.token.orEmpty(),
                 appToken = account.appToken.orEmpty(),
+                alipayStatus = LoginStatusStore.status(account, false),
+                appStatus = LoginStatusStore.status(account, true),
                 deviceSummary = account.rememberedDevices()
                     .takeIf { it.isNotEmpty() }
                     ?.let { "${it.size} 台设备" }
                     ?: "暂无设备"
             )
+        }
+    }
+
+    private fun checkLogins(account: Account) {
+        listOf(false, true).forEach { app ->
+            val token = (if (app) account.appToken else account.token).orEmpty()
+            if (token.isBlank()) return@forEach
+            val key = account.phone to app
+            if (loginStates[key]?.let { it.token == token && it.status == TokenValidity.CHECKING } == true) return@forEach
+            val checking = CheckedLogin(token, TokenValidity.CHECKING)
+            loginStates[key] = checking
+            LoginStatusStore.record(account, app, TokenValidity.CHECKING)
+            val callback = IlifeApi.JsonCallback { json, _ ->
+                runOnUiThread {
+                    if (loginStates[key] !== checking) return@runOnUiThread
+                    val current = AccountStore.get(this, account.phone) ?: return@runOnUiThread
+                    if ((if (app) current.appToken else current.token) != token) return@runOnUiThread
+                    loginStates[key] = CheckedLogin(token, TokenValidity.from(json))
+                    LoginStatusStore.record(current, app, TokenValidity.from(json))
+                }
+            }
+            if (app) IlifeApi.accountStatWithToken(token, account.uid, callback)
+            else IlifeApi.missionLstWithToken(token, false, callback)
         }
     }
 
@@ -157,7 +196,15 @@ class AccountsActivity : ComponentActivity() {
             return
         }
 
-        toast("正在核验登录信息…")
+        val original = fixedAccount ?: AccountStore.get(this, phone)
+            ?: AccountStore.list(this).firstOrNull { account ->
+                requested.keys.any { it == account.token || it == account.appToken }
+            }
+        val requestKey = original?.phone ?: phone
+        val request = Any()
+        pendingImports[requestKey] = request
+
+        toast("正在检查登录信息…")
         val inspected = ConcurrentHashMap<String, InspectedToken>()
         val remaining = AtomicInteger(requested.size)
         requested.keys.forEach { token ->
@@ -165,13 +212,14 @@ class AccountsActivity : ComponentActivity() {
                 inspected[token] = TokenImportResolver.inspect(token, probe, err)
                 if (remaining.decrementAndGet() == 0) {
                     runOnUiThread {
-                        val existing = fixedAccount
-                            ?: AccountStore.get(this, phone)
-                            ?: AccountStore.list(this).firstOrNull { account ->
-                                requested.keys.any { candidate ->
-                                    candidate == account.token || candidate == account.appToken
-                                }
-                            }
+                        if (isDestroyed || isFinishing || pendingImports[requestKey] !== request) return@runOnUiThread
+                        pendingImports.remove(requestKey)
+                        val existing = AccountStore.get(this, requestKey)
+                        if (original == null && existing != null || original != null &&
+                            (existing == null || existing.token != original.token || existing.appToken != original.appToken)) {
+                            toastLong("账号或登录信息已变化，请重新检查后保存")
+                            return@runOnUiThread
+                        }
                         val candidates = requested.map { (candidateToken, platforms) ->
                             TokenImportCandidate(
                                 inspection = inspected.getValue(candidateToken),
@@ -203,10 +251,11 @@ class AccountsActivity : ComponentActivity() {
                         if (setCurrent) AccountStore.addOrUpdate(this, account)
                         else AccountStore.addOrUpdateKeepingCurrent(this, account)
                         refresh()
+                        checkLogins(account)
 
                         val details = buildList {
                             addAll(resolution.notices)
-                            if (resolution.appToken.isBlank()) add("仍需完成设备登录，才能使用设备")
+                            if (resolution.appToken.isBlank()) add("仍需完成用水登录，才能使用设备")
                             if (resolution.mainToken.isBlank()) add("可补充积分登录，获得更多积分")
                         }.distinct()
                         toastLong(

@@ -4,6 +4,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class TaskNotificationTextFormatterTest {
+    @Test fun runningWithoutVerifiedCreditDoesNotClaimZeroEarned() {
+        assertEquals("积分任务运行中 · 暂未确认有积分增加",
+            TaskNotificationTextFormatter.format(TaskRunState(running = true)).title)
+    }
+
+    @Test fun partialRunWithoutVerifiedCreditDoesNotClaimZeroEarned() {
+        assertEquals("暂未确认有积分增加，可在运行记录中查看详情",
+            TaskNotificationTextFormatter.format(TaskRunState(result = TaskRunResult.PARTIAL)).text)
+    }
     @Test
     fun formatsSingleLaneWithCurrentAccountAndTask() {
         val state = TaskRunState(
@@ -25,7 +34,7 @@ class TaskNotificationTextFormatterTest {
 
         assertEquals(
             TaskNotificationText(
-                title = "积分任务运行中 · 已获得 15 分",
+                title = "积分任务运行中 · 已确认增加 15 分",
                 text = "测试账号 · [APP] 每日浏览（2/3）"
             ),
             TaskNotificationTextFormatter.format(state)
@@ -58,7 +67,7 @@ class TaskNotificationTextFormatterTest {
         )
 
         assertEquals(
-            "通道1：账号甲 · 每日签到；通道2：账号乙 · [支付宝] 浏览商品",
+            "账号甲 · 每日签到；账号乙 · [支付宝] 浏览商品",
             TaskNotificationTextFormatter.format(state).text
         )
     }
@@ -70,7 +79,7 @@ class TaskNotificationTextFormatterTest {
         )
 
         assertEquals(
-            TaskNotificationText("积分任务已完成", "本次共获得 35 分"),
+            TaskNotificationText("积分任务已完成", "本次已确认增加 35 分"),
             TaskNotificationTextFormatter.format(state)
         )
     }
@@ -85,7 +94,7 @@ class TaskNotificationTextFormatterTest {
         assertEquals(
             TaskNotificationText(
                 "积分任务已结束 · 部分未完成",
-                "本次已获得 20 分，可在运行记录中查看详情"
+                "本次已确认增加 20 分，可在运行记录中查看详情"
             ),
             TaskNotificationTextFormatter.format(state)
         )

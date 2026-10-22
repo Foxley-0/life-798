@@ -133,9 +133,19 @@ class ScoreUiStateFactoryTest {
 
         assertFalse(state.logs[0].isIncome)
         assertEquals("-200", state.logs[0].scoreText)
-        assertEquals("用户消费积分", state.logs[0].title)
+        assertEquals("接水积分消费", state.logs[0].title)
         assertTrue(state.logs[1].isIncome)
         assertEquals("+10", state.logs[1].scoreText)
         assertEquals("慧积分发放", state.logs[1].title)
     }
+    @Test
+    fun nestedSpendOverridesZeroScoreInConsumptionRow() {
+        val response = JSONObject().put("code", 0).put("data", JSONArray().put(
+            JSONObject().put("type", 107).put("score", 0).put("data", JSONObject().put("spend", 160))
+        ))
+        val state = ScoreUiStateFactory.from(Account("test"), JSONObject().put("code", 0).put("data", JSONObject()), response, null)
+        assertEquals("-160", state.logs.single().scoreText)
+        assertFalse(state.logs.single().isIncome)
+    }
+
 }

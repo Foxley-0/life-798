@@ -1,6 +1,8 @@
 package com.water.widget.ui
 
+import com.water.widget.WaterEstimate
 import com.water.widget.Account
+import com.water.widget.TokenValidity
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -18,7 +20,7 @@ class DashboardUiStateFactoryTest {
 
         assertEquals("--", state.summary.scoreTitle)
         assertTrue(state.summary.scoreSubtitle.contains("钱包未获取"))
-        assertEquals("积分登录已完成 · 设备登录未完成", state.summary.accountSubtitle)
+        assertEquals("用水登录未完成 · 积分登录未检测", state.summary.accountSubtitle)
         assertEquals(1, state.accounts.size)
         assertTrue(state.accounts.single().isCurrent)
     }
@@ -28,7 +30,7 @@ class DashboardUiStateFactoryTest {
         val state = DashboardUiStateFactory.from(null, 0)
 
         assertEquals("未登录", state.accountTitle)
-        assertEquals("完成设备登录后即可使用设备", state.accountSubtitle)
+        assertEquals("完成用水登录后即可使用设备", state.accountSubtitle)
         assertEquals("--", state.scoreTitle)
         assertEquals("登录后查看积分与钱包", state.scoreSubtitle)
         assertFalse(state.hasAccount)
@@ -51,7 +53,7 @@ class DashboardUiStateFactoryTest {
         val state = DashboardUiStateFactory.from(account, 2, 2380, walletBalance = 5.0)
 
         assertEquals("测试账户", state.accountTitle)
-        assertEquals("设备与积分登录均已完成", state.accountSubtitle)
+        assertEquals("用水登录未检测 · 积分登录未检测", state.accountSubtitle)
         assertEquals("≈¥7.38", state.scoreTitle)
         assertEquals("钱包 ¥5.00  +  积分 2380（≈¥2.38）", state.scoreSubtitle)
         assertTrue(state.hasAccount)
@@ -115,6 +117,21 @@ class DashboardUiStateFactoryTest {
     }
 
     @Test
+    fun `流水直接展示也遵循自定义比例与隐藏设置`() {
+        val account = Account("示例账户")
+        val json = JSONObject().put("code", 0).put("data", JSONArray().put(
+            JSONObject().put("ctime", System.currentTimeMillis()).put("type", 107)
+                .put("data", JSONObject().put("spend", 160))
+        ))
+        val estimate = WaterEstimate(visible = false, amountYuan = 0.20, volumeMl = 1000.0)
+        val state = DashboardUiStateFactory.from(account, 1, scoreJson = json, waterEstimate = estimate)
+        assertEquals("¥0.16", state.usage.todayCostText)
+        assertEquals("800 ml", state.usage.todayWaterText)
+        assertFalse(state.usage.showWaterEstimate)
+        assertFalse(DashboardUiStateFactory.from(account, 1, waterEstimate = estimate).usage.showWaterEstimate)
+    }
+
+    @Test
     fun `兑换前后总额度不变且未知余额不冒充零`() {
         val account = Account("示例账户")
         val before = DashboardUiStateFactory.from(account, 1, 2055, walletBalance = 5.0)
@@ -133,10 +150,40 @@ class DashboardUiStateFactoryTest {
 
         assertEquals(2, states.size)
         assertTrue(states[0].isCurrent)
-        assertEquals("设备与积分登录均已完成", states[0].subtitle)
-        assertEquals("积分登录已完成 · 设备登录已完成", states[0].tokenSummary)
+        assertEquals("用水登录未检测 · 积分登录未检测", states[0].subtitle)
+        assertEquals(states[0].subtitle, states[0].tokenSummary)
         assertEquals("1 台设备", states[0].deviceSummary)
         assertFalse(states[1].isCurrent)
-        assertEquals("设备登录已完成 · 可补充积分登录", states[1].subtitle)
+        assertEquals("用水登录未检测 · 积分登录未完成", states[1].subtitle)
+    }
+
+    @Test
+    fun `首页与账号列表使用相同检测结果而不是凭据是否存在`() {
+        val account = Account("status-account").apply { token = "main"; appToken = "app" }
+        val state = DashboardUiStateFactory.from(account, 1,
+            appStatus = TokenValidity.EXPIRED, alipayStatus = TokenValidity.VALID)
+        val row = DashboardUiStateFactory.accountsFrom(listOf(account), account.phone) { _, app ->
+            if (app) TokenValidity.EXPIRED else TokenValidity.VALID
+        }.single()
+
+        assertEquals("用水登录需重新验证 · 积分登录有效", state.accountSubtitle)
+        assertEquals(state.accountSubtitle, row.subtitle)
+        assertEquals("需重新验证", state.appLoginStatusText)
+        assertTrue(state.hasAppToken)
+        assertEquals("app", account.appToken)
+
+        val valid = DashboardUiStateFactory.from(account, 1,
+            appStatus = TokenValidity.VALID, alipayStatus = TokenValidity.VALID)
+        assertEquals("用水登录有效 · 积分登录有效", valid.accountSubtitle)
+        assertEquals("有效", valid.appLoginStatusText)
+    }
+
+    @Test
+    fun `未检测和检测失败不能显示已完成或失效`() {
+        val account = Account("unknown-account").apply { appToken = "app" }
+        val unchecked = DashboardUiStateFactory.from(account, 1)
+        assertEquals("用水登录未检测 · 积分登录未完成", unchecked.accountSubtitle)
+        val failed = DashboardUiStateFactory.from(account, 1, appStatus = TokenValidity.FAILED)
+        assertEquals("用水登录检测失败，请重试 · 积分登录未完成", failed.accountSubtitle)
     }
 }

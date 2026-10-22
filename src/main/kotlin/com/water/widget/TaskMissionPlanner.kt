@@ -1,6 +1,7 @@
 package com.water.widget
 
 import org.json.JSONArray
+import org.json.JSONObject
 
 enum class TaskPlatform { MAIN, APP }
 
@@ -21,7 +22,42 @@ data class MissionWorkItem(
     val platform: TaskPlatform
 )
 
+data class TaskScoreProgress(val completed: Map<String, Int>, val totalScore: Int?)
+
+class TaskPointsTracker(private val before: Int?) {
+    var total: Int = 0
+        private set
+
+    fun record(after: Int?): Int? {
+        val increase = TaskMissionPlanner.verifiedIncrease(before, after) ?: return null
+        if (increase < total) return null
+        val added = increase - total
+        total = increase
+        return added
+    }
+}
+
 object TaskMissionPlanner {
+    fun progress(data: JSONObject): TaskScoreProgress {
+        val score = requireNotNull(data.optJSONObject("accScoreRsp")) { "缺少账户积分进度" }
+        val limits = if (!score.has("limits") || score.isNull("limits")) JSONArray()
+            else requireNotNull(score.optJSONArray("limits")) { "任务次数格式错误" }
+        val completed = buildMap {
+            for (index in 0 until limits.length()) {
+                val limit = requireNotNull(limits.optJSONObject(index)) { "任务次数条目格式错误" }
+                val refId = limit.optString("refId")
+                require(refId.isNotBlank()) { "任务次数缺少 refId" }
+                val count = requireNotNull(limit.opt("limit")?.toString()?.toIntOrNull()) { "任务次数缺失" }
+                require(count >= -1) { "任务次数无效" }
+                put(refId, if (count == -1) Int.MAX_VALUE else count)
+            }
+        }
+        return TaskScoreProgress(completed, score.opt("totalScore")?.toString()?.toIntOrNull()?.takeIf { it >= 0 })
+    }
+
+    fun verifiedIncrease(before: Int?, after: Int?): Int? =
+        if (before == null || after == null || after < before) null else after - before
+
     fun merge(mainMissions: JSONArray?, appMissions: JSONArray?): List<PlannedMission> {
         val out = mutableListOf<PlannedMission>()
         val seen = mutableSetOf<String>()

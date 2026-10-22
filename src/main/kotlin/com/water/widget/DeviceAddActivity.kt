@@ -17,16 +17,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -49,6 +54,7 @@ import io.github.g00fy2.quickie.ScanCustomCode
 import io.github.g00fy2.quickie.config.BarcodeFormat
 import io.github.g00fy2.quickie.config.ScannerConfig
 import com.water.widget.ui.WaterTheme
+import com.water.widget.ui.WaterShapeTokens
 
 class DeviceAddActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,7 +111,7 @@ private fun scannerConfig(): ScannerConfig = ScannerConfig.build {
 }
 
 @Composable
-private fun DeviceAddScreen(
+internal fun DeviceAddScreen(
     onSave: (String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -151,10 +157,13 @@ private fun DeviceAddScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        DeviceAddHero()
+        DeviceAddHero(onBack)
 
         DeviceAddCard {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -183,7 +192,7 @@ private fun DeviceAddScreen(
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = WaterShapeTokens.compact
                 ) {
                     Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(20.dp))
                     Text("扫码添加", modifier = Modifier.padding(start = 8.dp))
@@ -191,20 +200,20 @@ private fun DeviceAddScreen(
             }
         }
 
-        Button(onClick = { onSave(deviceId) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Button(onClick = { onSave(deviceId) }, modifier = Modifier.fillMaxWidth(), shape = WaterShapeTokens.compact) {
             Text("保存设备")
         }
-        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth(), shape = WaterShapeTokens.compact) {
             Text("取消")
         }
     }
 }
 
 @Composable
-private fun DeviceAddHero() {
+private fun DeviceAddHero(onBack: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     Card(
-        shape = RoundedCornerShape(28.dp),
+        shape = WaterShapeTokens.prominent,
         colors = CardDefaults.cardColors(containerColor = colors.primaryContainer),
         border = BorderStroke(1.dp, colors.primary.copy(alpha = 0.16f))
     ) {
@@ -212,7 +221,12 @@ private fun DeviceAddHero() {
             modifier = Modifier.fillMaxWidth().padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("添加设备", fontSize = 27.sp, fontWeight = FontWeight.Bold, color = colors.onPrimaryContainer)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回", tint = colors.onPrimaryContainer)
+                }
+                Text("添加设备", modifier = Modifier.weight(1f), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = colors.onPrimaryContainer)
+            }
             Text("扫描二维码或填写设备编号", color = colors.onPrimaryContainer.copy(alpha = 0.78f), fontSize = 13.sp)
         }
     }
@@ -221,7 +235,7 @@ private fun DeviceAddHero() {
 @Composable
 private fun DeviceAddCard(content: @Composable () -> Unit) {
     Card(
-        shape = RoundedCornerShape(24.dp),
+        shape = WaterShapeTokens.card,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.62f)),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)

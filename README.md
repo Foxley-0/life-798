@@ -6,15 +6,23 @@ WaterWidget 是一个面向慧生活798用户的第三方 Android 设备控制�
 
 ## 功能
 
-- 饮水设备一键启动，接水结束后通知本次消费与估算水量
+- 饮水设备一键启动 / 停止，接水结束后通知本次消费与估算水量
 - 自动同步设备名称，支持设备别名、快捷移除和控制中心默认设备切换
-- 短信登录与账户管理：设备登录用于同步和启动设备、钱包充值及 App 端任务；补充积分登录可完成支付宝端任务并获得更多积分
-- 查看校园钱包余额，并通过支付宝完成充值
+- 短信登录与账户管理，分别检测用水与积分登录状态，支持重新验证对应端
+- 查看校园钱包余额、通过支付宝充值，并核对服务端充值订单
 - 扫描二维码或手动添加设备编号
-- 每日签到、积分任务与任务执行记录，通知栏实时显示任务进度与累计积分
-- 本地优先的今日 / 本月 / 本年消费与预计饮水量统计
+- 每日签到、积分任务与按账号分组的执行记录，通知栏显示进度及已核验积分变化
+- 本地优先的今日 / 本月 / 本年消费统计，支持按账号翻页查看消费记录
+- 可隐藏预估水量或自定义金额与水量的统一兑换比例（不区分账号与设备）
 - 桌面小部件、设备启动快捷设置磁贴
 - 浅色、深色和跟随系统的显示模式
+- 爱发电赞助入口
+
+## 积分任务风险
+
+首次进入积分任务页需阅读并确认风险提示。平台可能限制账号、扣除 / 清零 / 冻结积分，任务也可能失败或无法获得奖励；请求成功不等于奖励到账。本项目会核验执行期间的积分变化，但不能保证收益、到账或账号安全，也不能解除平台限制。
+
+**目前积分冻结、任务提示成功但未到账等问题仍未解决，原因尚未确认。** 出现异常时请停止任务并向官方核实，勿反复运行期待自动恢复。
 
 ## 运行环境
 
@@ -34,8 +42,10 @@ WaterWidget 是一个面向慧生活798用户的第三方 Android 设备控制�
 
 ```bash
 cp secrets.properties.example secrets.properties
-# 然后编辑 secrets.properties 填入实际的 API_GATEWAY / SIGN_SALT / API_CID
+# 然后编辑 secrets.properties 填入实际配置
 ```
+
+配置项为 `API_GATEWAY`、`SIGN_SALT`、`APP_SIGN_SALT`、`MINI_SIGN_SALT` 与 `API_CID`。App 与支付宝小程序使用各自的积分签名盐值，不可混用。示例值仅用于离线构建和测试，不可用于实际服务请求。
 
 > **说明**：未配置 `secrets.properties` 时项目仍可正常编译，但构建出的 APK 因缺少必要参数无法连接服务端。
 
@@ -52,6 +62,10 @@ cp secrets.properties.example secrets.properties
 ./gradlew assembleRelease
 ```
 
+Release 签名环境变量：`ANDROID_KEYSTORE_PATH`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。不要提交密钥或密码。
+
+GitHub PR 验证使用示例配置，不需要真实服务参数；标签发布还需配置上述五项 API Secrets，以及 `ANDROID_KEYSTORE_BASE64` 和三个签名密码 / 别名 Secrets。推送 `v*` 标签会触发发布流水线，已有同名 Release 时流水线不会替换其附件。
+
 APK 默认输出位置：
 
 ```text
@@ -67,12 +81,13 @@ app/build/outputs/apk/release/app-release.apk
 
 - [miuix](https://github.com/compose-miuix-ui/miuix)：使用 `miuix-ui` 的下拉刷新组件和 `miuix-blur` 的模糊能力，并在应用内适配刷新布局与状态衔接；Apache-2.0 License。
 - [QuickieExtended](https://github.com/T8RIN/QuickieExtended)：提供基于 CameraX 与 ML Kit 的二维码扫描能力；MIT License。
+- 感谢 [zhuying66](https://github.com/zhuying66) 在 [PR #22](https://github.com/nocookies111/life-798/pull/22) 中提出刷新验证码后的焦点改进；已结合异步加载流程适配整合。
 
 上述项目及其代码继续遵循各自的许可证，本项目的 MIT License 不替代其许可证。
 
 ## 免责声明
 
-本项目按现状提供，不对可用性、准确性或使用结果作任何保证，使用风险由使用者自行承担。
+本项目按现状提供，不对可用性、准确性或使用结果作任何保证，使用风险由使用者自行承担；不免除或限制法律规定不得免除或限制的责任。
 
 ## 许可证
 

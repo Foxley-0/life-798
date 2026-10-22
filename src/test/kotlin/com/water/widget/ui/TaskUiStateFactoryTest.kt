@@ -12,10 +12,11 @@ class TaskUiStateFactoryTest {
         val a = Account("账号A").apply { token = "token"; appToken = "app" }
         val b = Account("账号B").apply { token = "token" }
         val c = Account("账号C")
+        val d = Account("账号D").apply { appToken = "app-only" }
 
-        val state = TaskUiStateFactory.from(listOf(a, b, c), false, 0, emptyList())
+        val state = TaskUiStateFactory.from(listOf(a, b, c, d), false, 0, emptyList())
 
-        assertEquals(2, state.runnableAccounts)
+        assertEquals(3, state.runnableAccounts)
         assertEquals(1, state.dualPlatformAccounts)
         assertTrue(state.canRun)
     }
@@ -34,16 +35,27 @@ class TaskUiStateFactoryTest {
         val state = TaskUiStateFactory.from(emptyList(), false, 0, listOf("正常", "❌ 网络错误"))
 
         assertTrue(state.hasFailures)
+        assertTrue(TaskUiStateFactory.from(emptyList(), false, 0,
+            listOf("[账号A] 视频重试仍受限，跳过本任务剩余次数")).hasFailures)
     }
 
     @Test
-    fun `只有设备登录时提示补充积分登录`() {
+    fun `只有用水登录时可以运行App任务`() {
         val account = Account("账号A").apply { appToken = "app-token" }
 
         val state = TaskUiStateFactory.from(listOf(account), false, 0, emptyList())
 
+        assertTrue(state.canRun)
+        assertEquals(1, state.runnableAccounts)
+        assertEquals(0, state.dualPlatformAccounts)
+        assertEquals("1 个账号可运行", state.summary)
+    }
+
+    @Test
+    fun `没有任何登录凭据时仍不可运行`() {
+        val state = TaskUiStateFactory.from(listOf(Account("账号A")), false, 0, emptyList())
         assertFalse(state.canRun)
-        assertEquals("请完成积分登录", state.summary)
+        assertEquals("请完成用水登录或积分登录", state.summary)
     }
 
     @Test

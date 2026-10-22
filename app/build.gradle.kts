@@ -24,6 +24,8 @@ if (secretsFile.exists()) {
 }
 val apiGateway = secretsProps.getProperty("API_GATEWAY", "")
 val signSalt = secretsProps.getProperty("SIGN_SALT", "")
+val appSignSalt = secretsProps.getProperty("APP_SIGN_SALT", "")
+val miniSignSalt = secretsProps.getProperty("MINI_SIGN_SALT", "")
 val apiCid = secretsProps.getProperty("API_CID", "")
 
 android {
@@ -35,14 +37,16 @@ android {
         // 固定正式包名，所有本地与 CI 构建都保持一致；不要按 buildType 添加后缀。
         minSdk = 33
         targetSdk = 35
-        versionCode = 20
-        versionName = "5.4.2"
+        versionCode = 23
+        versionName = "5.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // 敏感配置注入 BuildConfig，源码不包含实际值。
         buildConfigField("String", "API_GATEWAY", "\"${apiGateway}\"")
         buildConfigField("String", "SIGN_SALT", "\"${signSalt}\"")
+        buildConfigField("String", "APP_SIGN_SALT", "\"${appSignSalt}\"")
+        buildConfigField("String", "MINI_SIGN_SALT", "\"${miniSignSalt}\"")
         buildConfigField("String", "API_CID", "\"${apiCid}\"")
 
         // 面向现代安卓真机分发；移除 32 位 ARM 与 x86 系列原生库以缩减 bundled ML Kit 扫码库体积。
@@ -142,7 +146,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }

@@ -52,6 +52,30 @@ class AccountDeviceMigrationTest {
     }
 
     @Test
+    fun `输错的默认设备码可移除并切换到剩余设备`() {
+        val account = Account("13800000000").apply {
+            selectDevice("device-valid")
+            selectDevice("输错的设备码")
+            setDeviceAlias("输错的设备码", "误添加")
+        }
+        account.forgetDevice("输错的设备码")
+        val restored = Account.fromJson(account.toJson())
+        assertEquals(listOf("device-valid"), restored.rememberedDevices())
+        assertEquals("device-valid", restored.selectedDeviceId())
+        assertFalse(restored.deviceAliases.containsKey("输错的设备码"))
+    }
+
+    @Test
+    fun `移除最后一个错误设备后保存重载不会重新出现`() {
+        val account = Account("13800000000").apply { selectDevice("wrong") }
+        account.forgetDevice("wrong")
+        val restored = Account.fromJson(account.toJson())
+        assertTrue(restored.rememberedDevices().isEmpty())
+        assertFalse(restored.hasDevices())
+        assertEquals("", restored.selectedDeviceId())
+    }
+
+    @Test
     fun `设备列表不再限制十二台`() {
         val account = Account("13800000000")
         repeat(30) { account.rememberDevice("device-$it", "设备 $it") }

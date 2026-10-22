@@ -47,4 +47,35 @@ class TaskMissionPlannerTest {
         assertEquals(30, work.size)
         assertTrue(work.all { it.refId == "A" })
     }
+    @Test
+    fun serverLimitsTakePrecedenceOverMissionCntAndHandleCompletedSentinel() {
+        val missions = TaskMissionPlanner.merge(JSONArray().put(JSONObject().put("refId", "a")
+            .put("name", "广告").put("score", 10).put("limit", 5).put("cnt", 0)), null)
+        for (count in listOf(5, -1)) {
+            val data = JSONObject().put("accScoreRsp", JSONObject().put("totalScore", "100")
+                .put("limits", JSONArray().put(JSONObject().put("refId", "a").put("limit", count))))
+            assertTrue(TaskMissionPlanner.buildWork(missions, TaskMissionPlanner.progress(data).completed).isEmpty())
+        }
+    }
+
+    @Test
+    fun absentLimitsMeanNoPreviousCompletionsAsInOfficialClient() {
+        val progress = TaskMissionPlanner.progress(JSONObject().put("accScoreRsp", JSONObject().put("totalScore", "100")))
+        assertEquals(emptyMap<String, Int>(), progress.completed)
+        assertEquals(100, progress.totalScore)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun malformedLimitsDoNotBecomeZeroCompletions() {
+        TaskMissionPlanner.progress(JSONObject().put("accScoreRsp", JSONObject().put("limits", "invalid")))
+    }
+
+    @Test
+    fun onlyVerifiedCumulativeIncreaseCountsAsPoints() {
+        assertEquals(0, TaskMissionPlanner.verifiedIncrease(100, 100))
+        assertEquals(15, TaskMissionPlanner.verifiedIncrease(100, 115))
+        assertEquals(null, TaskMissionPlanner.verifiedIncrease(100, null))
+        assertEquals(null, TaskMissionPlanner.verifiedIncrease(100, 99))
+    }
+
 }

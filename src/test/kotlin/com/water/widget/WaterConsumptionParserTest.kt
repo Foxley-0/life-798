@@ -8,6 +8,61 @@ import org.junit.Test
 
 class WaterConsumptionParserTest {
     @Test
+    fun mixedWalletAndPointsBillCountsFullCostWithoutAddingWalletBreakdownAgain() {
+        val bill = JSONObject().put("id", "mixed-water").put("type", 91).put("cata", 6)
+            .put("status", 3).put("payment", 0.12).put("discount", 0.08)
+            .put("promo", JSONObject().put("type", 4).put("discount", 0.08))
+            .put("mk", JSONObject().put("olGift", 0.12))
+            .put("utime", 1_800_000_022_000L)
+            .put("dev", JSONObject().put("id", "water-device"))
+        val detail = JSONObject().put("code", 0).put("data", JSONObject().put("bill", bill))
+        val result = WaterBillParser.fromDetail(detail, "mixed-water", "water-device")
+        assertEquals(200, result?.scoreEquivalent)
+        assertEquals("¥0.20", result?.moneyText)
+        assertEquals("bill:id:mixed-water", result?.historyKey)
+    }
+
+    @Test
+    fun completedPointsBillUsesDetailAndExcludesExchange() {
+        val record = JSONObject().put("id", "bill-160").put("type", 91).put("cata", 6)
+            .put("status", 3).put("payment", 0).put("discount", 0.16)
+            .put("promo", JSONObject().put("type", 4))
+            .put("ctime", 1_800_000_001_000L).put("utime", 1_800_000_022_000L)
+            .put("dev", JSONObject().put("id", "water-device"))
+        val detail = JSONObject().put("code", 0).put("data", JSONObject().put("bill", record))
+        val result = WaterBillParser.fromDetail(detail, "bill-160", "water-device")
+        assertEquals(160, result?.scoreEquivalent)
+        assertEquals("¥0.16", result?.moneyText)
+        assertEquals("bill:id:bill-160", result?.historyKey)
+        assertNull(WaterBillParser.fromDetail(detail, "bill-160", "other-device"))
+        assertNull(WaterBillParser.fromDetail(detail, "other-bill", "water-device"))
+        record.put("cata", 1)
+        assertNull(WaterBillParser.fromDetail(detail, "bill-160", "water-device"))
+    }
+
+    @Test
+    fun zeroPaymentCandidateCanBeSelectedForDetailVerification() {
+        val record = JSONObject().put("id", "bill-160").put("type", 91).put("cata", 6)
+            .put("status", 3).put("payment", 0).put("utime", 1_800_000_022_000L)
+        val response = JSONObject().put("code", 0).put("data", JSONArray().put(record))
+        assertEquals(listOf("bill-160"), WaterBillParser.candidateIds(response, 1_800_000_000_000L, emptySet(), ""))
+        assertEquals(emptyList<String>(), WaterBillParser.candidateIds(response, 0L, setOf("bill:id:bill-160"), ""))
+    }
+
+    @Test
+    fun scoreUsesBillNumberAndKeepsSameTimestampRecordsDistinct() {
+        val records = JSONArray()
+        for (id in listOf("one", "two")) {
+            records.put(JSONObject().put("type", 107).put("ctime", 1_800_000_001_000L)
+                .put("data", JSONObject().put("sn", id).put("spend", 160)))
+        }
+        val response = JSONObject().put("code", 0).put("data", records)
+        assertEquals(2, WaterConsumptionParser.recordKeys(response).size)
+        val result = WaterConsumptionParser.latestSince(response, 0L, "", setOf("score:id:one"))
+        assertEquals("bill:id:two", result?.historyKey)
+    }
+
+    @Test
     fun readsLatestConsumptionForCurrentDevice() {
         val json = JSONObject()
             .put("code", 0)
@@ -38,7 +93,7 @@ class WaterConsumptionParserTest {
 
         assertEquals(160, result?.spentScore)
         assertEquals("¥0.16", result?.moneyText)
-        assertEquals("500 ml", result?.estimatedWaterText)
+        assertEquals("本次消费 ¥0.16 · 水量约 500 ml", result?.completionText())
     }
 
     @Test
@@ -59,7 +114,7 @@ class WaterConsumptionParserTest {
         val result = WaterConsumptionParser.latestSince(json, 1_800_000_000_000L)
 
         assertEquals(335, result?.spentScore)
-        assertEquals("1.0 L", result?.estimatedWaterText)
+        assertEquals("本次消费 ¥0.34 · 水量约 1.0 L", result?.completionText())
     }
 
     @Test
@@ -114,7 +169,7 @@ class WaterConsumptionParserTest {
         val result = WaterBillParser.latestSince(json, 1_800_000_000_000L)
 
         assertEquals("¥0.25", result?.moneyText)
-        assertEquals("780 ml", result?.estimatedWaterText)
+        assertEquals("本次消费 ¥0.25 · 水量约 780 ml", result?.completionText())
     }
 
     @Test
@@ -233,4 +288,41 @@ class WaterConsumptionParserTest {
 
         assertNull(WaterConsumptionParser.latestSince(json, 1_800_000_000_000L))
     }
+    @Test
+    fun completedZeroBillEndsSessionWithoutCostOrEstimatedWater() {
+        val bill = JSONObject().put("id", "zero").put("type", 91).put("cata", 6)
+            .put("status", 3).put("payment", 0.0).put("discount", 0.0)
+            .put("utime", 1_800_000_002_000L).put("dev", JSONObject().put("id", "device-a"))
+        val detail = JSONObject().put("code", 0).put("data", JSONObject().put("bill", bill))
+        val result = WaterBillParser.fromDetail(detail, "zero", "device-a")!!
+        assertEquals(0, result.scoreEquivalent)
+        assertEquals("设备使用已结束", result.completionTitle)
+        assertEquals("本次未产生费用", result.completionText())
+        assertNull(WaterBillParser.fromDetail(detail, "zero", "other-device"))
+        bill.put("status", 2)
+        assertNull(WaterBillParser.fromDetail(detail, "zero", "device-a"))
+    }
+
+    @Test
+    fun missingPaymentIsNotMisreportedAsZeroCostCompletion() {
+        val bill = JSONObject().put("id", "unknown").put("type", 91).put("status", 3)
+            .put("utime", 1_800_000_002_000L)
+        val detail = JSONObject().put("code", 0).put("data", JSONObject().put("bill", bill))
+        assertNull(WaterBillParser.fromDetail(detail, "unknown", ""))
+    }
+
+    @Test
+    fun candidatesKeepCurrentDeviceWhenAnotherDeviceHasANewerBill() {
+        fun bill(id: String, time: Long, device: String?) = JSONObject().put("id", id)
+            .put("type", 91).put("status", 3).put("utime", time).apply {
+                if (device != null) put("dev", JSONObject().put("id", device))
+            }
+        val records = JSONArray().put(bill("current", 1_800_000_001_000L, "a"))
+            .put(bill("other", 1_800_000_003_000L, "b"))
+            .put(bill("unknown", 1_800_000_002_000L, null))
+        val response = JSONObject().put("code", 0).put("data", records)
+        assertEquals(listOf("unknown", "current"), WaterBillParser.candidateIds(response, 0L, emptySet(), "a"))
+        assertEquals(listOf("current"), WaterBillParser.candidateIds(response, 0L, setOf("bill:id:unknown"), "a"))
+    }
+
 }

@@ -42,15 +42,8 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Generate secrets.properties
-        env:
-          API_GATEWAY: ${{ secrets.API_GATEWAY }}
-          SIGN_SALT: ${{ secrets.SIGN_SALT }}
-          API_CID: ${{ secrets.API_CID }}
-        run: |
-          printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
-          printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
-          printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
+      - name: Use offline test configuration
+        run: cp secrets.properties.example secrets.properties
 
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --no-daemon --stacktrace --info
@@ -116,10 +109,19 @@ jobs:
         env:
           API_GATEWAY: ${{ secrets.API_GATEWAY }}
           SIGN_SALT: ${{ secrets.SIGN_SALT }}
+          APP_SIGN_SALT: ${{ secrets.APP_SIGN_SALT }}
+          MINI_SIGN_SALT: ${{ secrets.MINI_SIGN_SALT }}
           API_CID: ${{ secrets.API_CID }}
         run: |
+          test -n "$API_GATEWAY"
+          test -n "$SIGN_SALT"
+          test -n "$APP_SIGN_SALT"
+          test -n "$MINI_SIGN_SALT"
+          test -n "$API_CID"
           printf 'API_GATEWAY=%s\n' "$API_GATEWAY" > secrets.properties
           printf 'SIGN_SALT=%s\n' "$SIGN_SALT" >> secrets.properties
+          printf 'APP_SIGN_SALT=%s\n' "$APP_SIGN_SALT" >> secrets.properties
+          printf 'MINI_SIGN_SALT=%s\n' "$MINI_SIGN_SALT" >> secrets.properties
           printf 'API_CID=%s\n' "$API_CID" >> secrets.properties
 
       - name: Check release signing configuration
@@ -193,7 +195,7 @@ jobs:
         run: |
           asset="$RUNNER_TEMP/release-assets/WaterWidget-${GITHUB_REF_NAME}-release.apk"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
+            echo "Release already exists; keeping its current state and assets unchanged."
           else
             gh release create "$GITHUB_REF_NAME" "$asset" --generate-notes
           fi

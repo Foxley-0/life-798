@@ -1,6 +1,6 @@
 package com.water.widget.ui
 
-import com.water.widget.WaterBillParser
+import com.water.widget.WaterEstimate
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -72,29 +72,48 @@ class UsageHistoryLedgerTest {
     }
 
     @Test
-    fun `缺少积分登录时的本地账单阻止旧积分流水重复累计`() {
+    fun `账单与积分流水按订单去重且不跳过其他旧流水`() {
         val now = Calendar.getInstance()
-        val billJson = JSONObject()
-            .put("code", 0)
-            .put(
-                "data",
-                JSONArray().put(
-                    JSONObject()
-                        .put("id", "shared-order")
-                        .put("type", 91)
-                        .put("status", 3)
-                        .put("ctime", now.timeInMillis)
-                        .put("payment", 0.16)
-                )
-            )
-        val bill = requireNotNull(WaterBillParser.latestSince(billJson, 0L))
-        val ledger = UsageHistoryLedger()
+        val json = response(now.timeInMillis, 160, "score-record")
+        json.getJSONArray("data").getJSONObject(0).getJSONObject("data").put("sn", "shared-order")
+        for (billFirst in listOf(true, false)) {
+            val ledger = UsageHistoryLedger()
+            if (billFirst) ledger.recordLocal("bill:id:shared-order", now.timeInMillis + 12, 160)
+            ledger.merge(json)
+            if (!billFirst) ledger.recordLocal("bill:id:shared-order", now.timeInMillis + 12, 160)
+            val restored = UsageHistoryLedger.fromJson(ledger.toJson())
+            assertFalse(restored.merge(json))
+            assertFalse(restored.recordLocal("bill:id:shared-order", now.timeInMillis, 160))
+            assertTrue(restored.merge(response(now.timeInMillis - 1000, 50, "another-order")))
+            assertEquals("¥0.21", restored.toUiState(now).todayCostText)
+        }
+    }
 
-        assertTrue(ledger.recordLocal(bill.historyKey, bill.occurredAt, bill.scoreEquivalent))
+    @Test
+    fun `旧积分历史迁移后仅补入账单的额外钱包消费`() {
+        val now = Calendar.getInstance()
+        val ledger = UsageHistoryLedger()
+        ledger.recordLocal("legacy-score", now.timeInMillis, 100)
+        val json = response(now.timeInMillis, 100, "legacy-score")
+        json.getJSONArray("data").getJSONObject(0).getJSONObject("data").put("sn", "mixed-order")
         val restored = UsageHistoryLedger.fromJson(ledger.toJson())
-        assertFalse(restored.merge(response(now.timeInMillis, 160, "different-score-record")))
-        assertTrue(restored.merge(response(now.timeInMillis + 1_000L, 160, "future-score-record")))
-        assertEquals("¥0.32", restored.toUiState(now).todayCostText)
+        restored.merge(json)
+        restored.recordLocal("bill:id:mixed-order", now.timeInMillis, 180)
+        assertEquals("¥0.18", restored.toUiState(now).todayCostText)
+        assertFalse(restored.merge(json))
+    }
+
+    @Test
+    fun `旧记录晚于账单迁移时也不会重复累计`() {
+        val now = Calendar.getInstance()
+        val ledger = UsageHistoryLedger()
+        ledger.recordLocal("legacy-score", now.timeInMillis, 100)
+        ledger.recordLocal("bill:id:mixed-order", now.timeInMillis, 180)
+        val json = response(now.timeInMillis, 100, "legacy-score")
+        json.getJSONArray("data").getJSONObject(0).getJSONObject("data").put("sn", "mixed-order")
+        ledger.merge(json)
+        assertEquals("¥0.18", ledger.toUiState(now).todayCostText)
+        assertFalse(ledger.merge(json))
     }
 
     @Test
@@ -117,6 +136,27 @@ class UsageHistoryLedgerTest {
         val again = UsageHistoryLedger.fromJson(restored.toJson())
         assertFalse(again.merge(json))
         assertEquals("¥0.18", again.toUiState(now).todayCostText)
+    }
+
+    @Test
+    fun `修改比例重算历史水量但不改金额或历史数据`() {
+        val now = Calendar.getInstance().apply { set(2026, Calendar.JULY, 15, 12, 0, 0) }
+        val lastMonth = (now.clone() as Calendar).apply { add(Calendar.MONTH, -1) }
+        val ledger = UsageHistoryLedger()
+        ledger.merge(response(now.timeInMillis, 160, "today"))
+        ledger.merge(response(lastMonth.timeInMillis, 320, "last-month"))
+        val persisted = ledger.toJson().toString()
+        val restored = UsageHistoryLedger.fromJson(JSONObject(persisted))
+        val state = restored.toUiState(now, WaterEstimate(amountYuan = 0.20, volumeMl = 1000.0))
+        assertEquals("¥0.16", state.todayCostText)
+        assertEquals("¥0.16", state.monthCostText)
+        assertEquals("¥0.48", state.yearCostText)
+        assertEquals("800 ml", state.todayWaterText)
+        assertEquals("800 ml", state.monthWaterText)
+        assertEquals("2.4 L", state.yearWaterText)
+        assertEquals(persisted, restored.toJson().toString())
+        assertFalse(restored.toUiState(now, WaterEstimate(visible = false)).showWaterEstimate)
+        assertFalse(UsageHistoryLedger().toUiState(now, WaterEstimate(visible = false)).showWaterEstimate)
     }
 
     private fun response(time: Long, spend: Int, id: String) = JSONObject()

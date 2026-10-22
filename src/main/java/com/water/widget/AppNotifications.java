@@ -19,6 +19,7 @@ public final class AppNotifications {
     public static final int WATER_SESSION_ID = 2201;
     public static final int WATER_RESULT_ID = 2202;
     public static final int TASK_PROGRESS_ID = 2301;
+    public static final int TASK_RESULT_ID = 2302;
 
     private AppNotifications() {}
 
@@ -28,7 +29,7 @@ public final class AppNotifications {
 
         NotificationChannel session = new NotificationChannel(
                 CHANNEL_WATER_SESSION,
-                "设备运行状态",
+                "接水提醒",
                 NotificationManager.IMPORTANCE_LOW
         );
         session.setDescription("显示设备启动及用水记录获取状态");
@@ -64,19 +65,28 @@ public final class AppNotifications {
         return channel != null && channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
     }
 
-    public static Notification waterProgress(Context context, String text) {
+    public static Notification waterProgress(Context context, String text, long reservationId, long createdAt, long timeoutMillis) {
         ensureChannels(context);
         Notification.Builder builder = new Notification.Builder(context, CHANNEL_WATER_SESSION)
                 .setSmallIcon(R.drawable.ic_water_drop)
-                .setContentTitle("饮水设备")
+                .setContentTitle("接水提醒")
                 .setContentText(text)
                 .setContentIntent(openApp(context, false, 2201))
                 .setCategory(Notification.CATEGORY_PROGRESS)
                 .setVisibility(Notification.VISIBILITY_PRIVATE)
                 .setOnlyAlertOnce(true)
                 .setOngoing(true)
-                .setShowWhen(false)
-                .setProgress(0, 0, true);
+                .setWhen(createdAt)
+                .setShowWhen(true)
+                .setProgress(0, 0, true)
+                .setTimeoutAfter(timeoutMillis)
+                .addAction(new Notification.Action.Builder(null, "结束提醒",
+                        PendingIntent.getService(context, 2203,
+                                new Intent(context, WaterService.class)
+                                        .setAction(WaterService.ACTION_STOP_MONITORING)
+                                        .setData(android.net.Uri.parse("waterwidget:monitor/" + reservationId))
+                                        .putExtra(WaterService.EXTRA_RESERVATION_ID, reservationId),
+                                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE)).build());
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         }

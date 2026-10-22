@@ -22,7 +22,7 @@ public class AccountStore {
 
     private static final String OLD_PREFS = "water_cfg";
 
-    public static List<Account> list(Context ctx) {
+    public static synchronized List<Account> list(Context ctx) {
         ensureMigrated(ctx);
         List<Account> out = new ArrayList<>();
         try {
@@ -34,7 +34,7 @@ public class AccountStore {
         return out;
     }
 
-    public static Account getCurrent(Context ctx) {
+    public static synchronized Account getCurrent(Context ctx) {
         ensureMigrated(ctx);
         String curPhone = sp(ctx).getString(KEY_CURRENT, "");
         for (Account a : list(ctx)) {
@@ -50,20 +50,20 @@ public class AccountStore {
     }
 
     /** 按手机号查找账户，找不到返回 null。 */
-    public static Account get(Context ctx, String phone) {
+    public static synchronized Account get(Context ctx, String phone) {
         for (Account a : list(ctx)) {
             if (a.phone.equals(phone)) return a;
         }
         return null;
     }
 
-    public static void addOrUpdate(Context ctx, Account acc) {
+    public static synchronized void addOrUpdate(Context ctx, Account acc) {
         addOrUpdateKeepingCurrent(ctx, acc);
         setCurrent(ctx, acc.phone);
     }
 
     /** 保存账户但不改变当前选中账户。用于后台补全和编辑非当前账户。 */
-    public static void addOrUpdateKeepingCurrent(Context ctx, Account acc) {
+    public static synchronized void addOrUpdateKeepingCurrent(Context ctx, Account acc) {
         List<Account> all = list(ctx);
         boolean found = false;
         for (int i = 0; i < all.size(); i++) {
@@ -77,11 +77,19 @@ public class AccountStore {
         save(ctx, all);
     }
 
-    public static void updateCurrent(Context ctx, Account acc) {
+    /** 后台仅合并 UID；不覆盖设备配置，也不恢复已删除或重新登录的账号。 */
+    public static synchronized void updateUid(Context ctx, String phone, String sourceToken, String uid) {
+        Account account = get(ctx, phone);
+        if (account == null || (!sourceToken.equals(account.token) && !sourceToken.equals(account.appToken))) return;
+        account.uid = uid;
+        addOrUpdateKeepingCurrent(ctx, account);
+    }
+
+    public static synchronized void updateCurrent(Context ctx, Account acc) {
         addOrUpdate(ctx, acc);
     }
 
-    public static void remove(Context ctx, String phone) {
+    public static synchronized void remove(Context ctx, String phone) {
         List<Account> all = list(ctx);
         List<Account> out = new ArrayList<>();
         for (Account a : all) {
@@ -94,7 +102,7 @@ public class AccountStore {
         }
     }
 
-    public static void setCurrent(Context ctx, String phone) {
+    public static synchronized void setCurrent(Context ctx, String phone) {
         sp(ctx).edit().putString(KEY_CURRENT, phone).apply();
     }
 
