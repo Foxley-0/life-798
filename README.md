@@ -16,7 +16,6 @@ WaterWidget 是一个面向慧生活798用户的第三方 Android 设备控制�
 - 可隐藏预估水量或自定义金额与水量的统一兑换比例（不区分账号与设备）
 - 桌面小部件、设备启动快捷设置磁贴
 - 浅色、深色和跟随系统的显示模式
-- 爱发电赞助入口
 
 ## 积分任务风险
 
@@ -81,7 +80,9 @@ app/build/outputs/apk/release/app-release.apk
 
 - [miuix](https://github.com/compose-miuix-ui/miuix)：使用 `miuix-ui` 的下拉刷新组件和 `miuix-blur` 的模糊能力，并在应用内适配刷新布局与状态衔接；Apache-2.0 License。
 - [QuickieExtended](https://github.com/T8RIN/QuickieExtended)：提供基于 CameraX 与 ML Kit 的二维码扫描能力；MIT License。
+- 感谢 [wasdwx](https://github.com/wasdwx) 在 [PR #5](https://github.com/nocookies111/life-798/pull/5) 中贡献底部导航栏避让系统导航栏的修复。
 - 感谢 [zhuying66](https://github.com/zhuying66) 在 [PR #22](https://github.com/nocookies111/life-798/pull/22) 中提出刷新验证码后的焦点改进；已结合异步加载流程适配整合。
+- 感谢 [luckjokerwang](https://github.com/luckjokerwang) 在 [PR #24](https://github.com/nocookies111/life-798/pull/24) 中提供官方版本兼容问题的分析与修复建议；当前修复由本项目独立分析实现，未直接合并该 PR。
 
 上述项目及其代码继续遵循各自的许可证，本项目的 MIT License 不替代其许可证。
 
