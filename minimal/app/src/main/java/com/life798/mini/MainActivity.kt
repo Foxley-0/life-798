@@ -79,7 +79,6 @@ class MainActivity : ComponentActivity() {
                             state = state,
                             onScan = { screen = Screen.SCAN.name },
                             onStart = vm::startDevice,
-                            onStop = vm::stopDevice,
                             onLogout = vm::logout,
                             onClearMessage = vm::clearMessage,
                             onOpenLog = { screen = Screen.LOG.name }

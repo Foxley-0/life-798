@@ -44,7 +44,6 @@ fun HomeScreen(
     state: UiState,
     onScan: () -> Unit,
     onStart: () -> Unit,
-    onStop: () -> Unit,
     onLogout: () -> Unit,
     onClearMessage: () -> Unit,
     onOpenLog: () -> Unit
@@ -130,53 +129,12 @@ fun HomeScreen(
             }
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(32.dp))
 
-        // 运行状态 / 计时
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(96.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            if (state.running) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = formatDuration(state.elapsedSec),
-                        fontSize = 40.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Light,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "使用中",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                Text(
-                    text = "设备未运行",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        // 主操作
+        // 只有启动。设备启动后由用户在设备本体上结算，App 不提供停止与计时。
         Button(
-            onClick = { if (state.running) onStop() else onStart() },
+            onClick = onStart,
             enabled = !state.busy && state.deviceId.isNotBlank(),
-            colors = if (state.running) {
-                ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError
-                )
-            } else {
-                ButtonDefaults.buttonColors()
-            },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)
@@ -188,7 +146,7 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.onPrimary
                 )
             } else {
-                Text(if (state.running) "停 止" else "启 动", fontSize = 17.sp)
+                Text("启 动", fontSize = 17.sp)
             }
         }
 
@@ -197,17 +155,11 @@ fun HomeScreen(
         if (toast != null) {
             Text(
                 text = toast!!,
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.primary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
         }
     }
-}
-
-private fun formatDuration(sec: Long): String {
-    val m = sec / 60
-    val s = sec % 60
-    return "%02d:%02d".format(m, s)
 }

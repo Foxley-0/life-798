@@ -28,9 +28,6 @@ data class UiState(
     val captchaError: String? = null,
     val busy: Boolean = false,
     val message: String? = null,
-    val running: Boolean = false,
-    val startedAt: Long = 0L,
-    val elapsedSec: Long = 0L,
     val smsCountdown: Int = 0,
     val configured: Boolean = true
 ) {
@@ -45,7 +42,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _ui = MutableStateFlow(UiState(configured = api.isConfigured))
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
-    private var ticker: Job? = null
     private var smsTimer: Job? = null
 
     init {
@@ -166,8 +162,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun logout() {
         viewModelScope.launch {
             prefs.clearSession()
-            stopTicker()
-            _ui.value = _ui.value.copy(token = "", running = false, startedAt = 0L, elapsedSec = 0L)
+            _ui.value = _ui.value.copy(token = "")
             refreshCaptcha()
         }
     }
@@ -197,53 +192,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun startDevice() {
         val s = _ui.value
         if (s.deviceId.isBlank()) return note("请先扫码添加设备")
-        if (s.running) return
+        if (s.busy) return
 
         viewModelScope.launch {
             _ui.value = _ui.value.copy(busy = true, message = null)
             when (val r = api.devStart(s.token, s.deviceId)) {
                 is ApiResult.Ok -> {
                     AppLog.i("Device", "启动成功 did=${s.deviceId}")
+                    // 设备启动后由用户在设备本体上结算，App 侧不需要计时或停止
                     _ui.value = _ui.value.copy(
                         busy = false,
-                        running = true,
-                        startedAt = System.currentTimeMillis(),
-                        elapsedSec = 0L,
-                        message = "设备已启动"
+                        message = "已启动，请在设备上使用"
                     )
-                    startTicker()
                 }
 
                 is ApiResult.Err -> {
                     AppLog.w("Device", "启动失败 did=${s.deviceId}: ${r.message} code=${r.code}")
-                    _ui.value = _ui.value.copy(busy = false, message = r.message)
-                    if (r.code == -99) logout()
-                }
-            }
-        }
-    }
-
-    fun stopDevice() {
-        val s = _ui.value
-        if (!s.running) return
-
-        viewModelScope.launch {
-            _ui.value = _ui.value.copy(busy = true, message = null)
-            when (val r = api.devEnd(s.token, s.deviceId)) {
-                is ApiResult.Ok -> {
-                    AppLog.i("Device", "停止成功 did=${s.deviceId}")
-                    stopTicker()
-                    _ui.value = _ui.value.copy(
-                        busy = false,
-                        running = false,
-                        startedAt = 0L,
-                        elapsedSec = 0L,
-                        message = "设备已停止"
-                    )
-                }
-
-                is ApiResult.Err -> {
-                    AppLog.w("Device", "停止失败 did=${s.deviceId}: ${r.message} code=${r.code}")
                     _ui.value = _ui.value.copy(busy = false, message = r.message)
                     if (r.code == -99) logout()
                 }
@@ -256,24 +220,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---------------- 内部 ----------------
-
-    private fun startTicker() {
-        stopTicker()
-        ticker = viewModelScope.launch {
-            while (true) {
-                val started = _ui.value.startedAt
-                if (started <= 0L) break
-                val sec = (System.currentTimeMillis() - started) / 1000
-                _ui.value = _ui.value.copy(elapsedSec = sec)
-                delay(1000)
-            }
-        }
-    }
-
-    private fun stopTicker() {
-        ticker?.cancel()
-        ticker = null
-    }
 
     private fun startSmsCountdown() {
         smsTimer?.cancel()
@@ -299,7 +245,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
-        stopTicker()
         smsTimer?.cancel()
     }
 }
