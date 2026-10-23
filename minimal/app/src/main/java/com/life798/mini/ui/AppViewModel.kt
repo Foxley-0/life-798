@@ -23,6 +23,8 @@ data class UiState(
     val deviceId: String = "",
     val captchaKey: String = "",
     val captchaImage: ByteArray? = null,
+    val captchaLoading: Boolean = false,
+    val captchaError: String? = null,
     val busy: Boolean = false,
     val message: String? = null,
     val running: Boolean = false,
@@ -56,7 +58,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 phone = phone,
                 deviceId = device
             )
-            if (token.isNotBlank()) {
+            // 未登录才需要图形验证码；已登录直接进首页，不必白跑一次请求。
+            if (token.isBlank()) {
                 refreshCaptcha()
             }
         }
@@ -65,14 +68,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------- 登录 ----------------
 
     fun refreshCaptcha() {
-        viewModelScope.launch {
-            val key = randomKey()
-            val bytes = api.captcha(key)
+        if (!api.isConfigured) {
             _ui.value = _ui.value.copy(
-                captchaKey = key,
-                captchaImage = bytes,
-                message = if (bytes == null) "图形验证码获取失败，点击图片重试" else null
+                captchaLoading = false,
+                captchaImage = null,
+                captchaError = "未配置 API 网关"
             )
+            return
+        }
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(captchaLoading = true, captchaError = null)
+            val key = randomKey()
+            when (val r = api.captcha(key)) {
+                is ApiResult.Ok -> _ui.value = _ui.value.copy(
+                    captchaLoading = false,
+                    captchaKey = key,
+                    captchaImage = r.data,
+                    captchaError = null
+                )
+
+                is ApiResult.Err -> _ui.value = _ui.value.copy(
+                    captchaLoading = false,
+                    captchaImage = null,
+                    captchaError = r.message
+                )
+            }
         }
     }
 

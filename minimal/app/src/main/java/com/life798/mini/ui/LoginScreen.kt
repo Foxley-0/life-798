@@ -15,11 +15,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,7 +39,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * 登录页：手机号 + 图形验证码 + 短信验证码，一屏完成，不做跳转。
+ * 登录页：手机号 + 图形验证码 + 短信验证码，一屏完成。
+ *
+ * 验证码区域分三态：加载中 / 已加载 / 失败（附具体原因），
+ * 避免出现「空白且没有任何提示」的情况。
  */
 @Composable
 fun LoginScreen(
@@ -74,7 +79,24 @@ fun LoginScreen(
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(20.dp))
+
+        // 网关没配就直接挡在门口，别让人白试
+        if (!state.configured) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "未配置 API 网关，无法登录。请检查 secrets.properties 或仓库 Secrets。",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+        }
 
         OutlinedTextField(
             value = phone,
@@ -98,20 +120,26 @@ fun LoginScreen(
             Spacer(Modifier.width(12.dp))
             Box(
                 modifier = Modifier
-                    .size(width = 104.dp, height = 56.dp)
+                    .size(width = 108.dp, height = 56.dp)
                     .clickable { onRefreshCaptcha() },
                 contentAlignment = Alignment.Center
             ) {
-                if (captchaBitmap != null) {
-                    Image(
+                when {
+                    state.captchaLoading -> CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+
+                    captchaBitmap != null -> Image(
                         bitmap = captchaBitmap.asImageBitmap(),
                         contentDescription = "图形验证码，点击刷新",
                         modifier = Modifier.fillMaxSize()
                     )
-                } else {
-                    Text(
-                        text = "点击加载",
-                        fontSize = 12.sp,
+
+                    else -> Text(
+                        text = if (state.captchaError != null) "加载失败\n点此重试" else "点此加载",
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
                         color = MaterialTheme.colorScheme.primary,
                         textAlign = TextAlign.Center
                     )
@@ -119,7 +147,23 @@ fun LoginScreen(
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = state.captchaError.orEmpty(),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onRefreshCaptcha, enabled = !state.captchaLoading) {
+                Text("换一张", fontSize = 12.sp)
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -133,7 +177,7 @@ fun LoginScreen(
             Spacer(Modifier.width(12.dp))
             TextButton(
                 onClick = { onSendSms(phone, graphCode) },
-                enabled = state.smsCountdown == 0 && !state.busy
+                enabled = state.smsCountdown == 0 && !state.busy && state.configured
             ) {
                 Text(
                     text = if (state.smsCountdown > 0) "${state.smsCountdown}s" else "获取验证码",
@@ -142,11 +186,11 @@ fun LoginScreen(
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
 
         Button(
             onClick = { onLogin(phone, smsCode) },
-            enabled = !state.busy,
+            enabled = !state.busy && state.configured,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
@@ -163,21 +207,10 @@ fun LoginScreen(
         }
 
         if (state.message != null) {
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(14.dp))
             Text(
                 text = state.message,
                 fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        if (!state.configured) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = "未配置 API 网关，请检查 secrets.properties",
-                fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.error,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()

@@ -41,14 +41,43 @@ class WaterApi(
 
     // ---------- 登录链路 ----------
 
-    /** 图形验证码：返回图片字节，失败返回 null。 */
-    suspend fun captcha(key: String): ByteArray? = withContext(Dispatchers.IO) {
+    /** 图形验证码：返回图片字节。失败时给出可读原因，便于界面上直接展示。 */
+    suspend fun captcha(key: String): ApiResult<ByteArray> = withContext(Dispatchers.IO) {
+        if (base.isBlank()) {
+            return@withContext ApiResult.Err("未配置 API 网关")
+        }
         val url = "$base/captcha/?s=$key&r=${System.currentTimeMillis()}"
-        runCatching {
+        try {
             client.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
-                if (resp.isSuccessful) resp.body?.bytes() else null
+                if (!resp.isSuccessful) {
+                    return@use ApiResult.Err("HTTP ${resp.code}")
+                }
+                val bytes = resp.body?.bytes()
+                if (bytes == null || bytes.isEmpty()) {
+                    return@use ApiResult.Err("响应为空")
+                }
+                if (!looksLikeImage(bytes)) {
+                    // 服务端有时会返回 JSON 错误体，把前 120 字符带出来便于定位
+                    val text = String(bytes, Charsets.UTF_8).take(120)
+                    return@use ApiResult.Err("返回的不是图片：$text")
+                }
+                ApiResult.Ok(bytes)
             }
-        }.getOrNull()
+        } catch (e: Exception) {
+            ApiResult.Err("网络异常：${e.message ?: "无法连接服务器"}")
+        }
+    }
+
+    /** 粗略判断字节流是不是图片（JPEG / PNG / GIF / WEBP）。 */
+    private fun looksLikeImage(b: ByteArray): Boolean {
+        if (b.size < 4) return false
+        val b0 = b[0].toInt() and 0xFF
+        val b1 = b[1].toInt() and 0xFF
+        val jpeg = b0 == 0xFF && b1 == 0xD8
+        val png = b0 == 0x89 && b1 == 0x50
+        val gif = b0 == 0x47 && b1 == 0x49
+        val webp = b.size > 12 && b0 == 0x52 && b1 == 0x49
+        return jpeg || png || gif || webp
     }
 
     /** 发送短信验证码。此接口不需要签名。 */
