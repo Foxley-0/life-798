@@ -1,95 +1,155 @@
-# WaterWidget
+# 798 小助手
 
-WaterWidget 是一个面向慧生活798用户的第三方 Android 设备控制客户端，提供多账户管理、饮水设备启动、钱包充值、用水消费统计、桌面小部件、快捷设置磁贴与设备二维码添加功能。
+慧生活798 的极度精简客户端。**只做一件事：扫码启动用水设备。**
 
-> 非官方项目，与慧生活798服务提供方无关。请仅使用你本人有权访问的账户和设备，并遵守相关服务规则。
+没有钱包、没有积分、没有签到、没有小部件、没有推送。
+打开是登录，登录完是扫码，扫完是启动。
+
+---
+
+## 为什么做这个
+
+官方客户端功能很多，但日常真正用到的只有两个动作：扫码、启动。
+剩下的模块每次都要多点几下才能进去，中间还夹着开屏广告和推送。
+
+这个版本把那些全部砍掉，只留最短路径。
+
+---
 
 ## 功能
 
-- 饮水设备一键启动 / 停止，接水结束后通知本次消费与估算水量
-- 自动同步设备名称，支持设备别名、快捷移除和控制中心默认设备切换
-- 短信登录与账户管理，分别检测用水与积分登录状态，支持重新验证对应端
-- 查看校园钱包余额、通过支付宝充值，并核对服务端充值订单
-- 扫描二维码或手动添加设备编号
-- 每日签到、积分任务与按账号分组的执行记录，通知栏显示进度及已核验积分变化
-- 本地优先的今日 / 本月 / 本年消费统计，支持按账号翻页查看消费记录
-- 可隐藏预估水量或自定义金额与水量的统一兑换比例（不区分账号与设备）
-- 桌面小部件、设备启动快捷设置磁贴
-- 浅色、深色和跟随系统的显示模式
+- 手机号 + 图形验证码 + 短信验证码登录
+- 扫描设备二维码，自动提取设备编号
+- 一键启动设备
+- 启动后**在设备本体上结算**（服务端限制，App 无法停止）
 
-## 积分任务风险
+## 不提供
 
-首次进入积分任务页需阅读并确认风险提示。平台可能限制账号、扣除 / 清零 / 冻结积分，任务也可能失败或无法获得奖励；请求成功不等于奖励到账。本项目会核验执行期间的积分变化，但不能保证收益、到账或账号安全，也不能解除平台限制。
+| 模块 | 说明 |
+|---|---|
+| 钱包 / 充值 | 不涉及资金操作 |
+| 积分 / 任务 / 签到 | 全部移除 |
+| 多账户 | 只支持单账号 |
+| 桌面小部件 / 快捷磁贴 | 未实现 |
+| 消费统计 | 未实现 |
+| 推送 / 广告 / 埋点 / 崩溃上报 | 一个都没有 |
 
-**目前积分冻结、任务提示成功但未到账等问题仍未解决，原因尚未确认。** 出现异常时请停止任务并向官方核实，勿反复运行期待自动恢复。
+---
 
 ## 运行环境
 
-- Android 13（API 33）及以上
-- 仅提供 `arm64-v8a` 安装包，适用于现代 64 位 Android 设备
+- Android 8.0（API 26）及以上
+- 需要相机权限（扫码）
+
+## 安装
+
+从 [Releases](../../releases) 下载最新 APK 直接安装。
+
+首次启动需要登录，登录后设备会记在本机，下次打开可直接扫码。
+
+---
 
 ## 构建
 
-项目采用 Gradle Kotlin DSL、Gradle 9.5、JDK 21、Kotlin 2.4 和 Jetpack Compose。源码通过 Gradle `sourceSets` 直接使用仓库根目录的 `src/main` 和 `src/test`。
+### 环境要求
 
-### 配置参数
+- JDK 21
+- Android SDK：`compileSdk 37`、`build-tools 35+`
+- Gradle 9.5（wrapper 已内置，无需另装）
 
-项目中的 API 地址、签名盐值等信息通过 `secrets.properties` 注入，**不会提交到版本控制**。构建前需手动创建：
+### 配置敏感参数
 
-1. 复制项目根目录的 `secrets.properties.example` 为 `secrets.properties`
-2. 将其中的占位值替换为实际值
+API 网关与签名盐值通过 `secrets.properties` 注入，**该文件不进版本控制**：
 
 ```bash
+cd minimal
 cp secrets.properties.example secrets.properties
-# 然后编辑 secrets.properties 填入实际配置
+# 编辑并填入 API_GATEWAY 与 APP_SIGN_SALT
 ```
 
-配置项为 `API_GATEWAY`、`SIGN_SALT`、`APP_SIGN_SALT`、`MINI_SIGN_SALT` 与 `API_CID`。App 与支付宝小程序使用各自的积分签名盐值，不可混用。示例值仅用于离线构建和测试，不可用于实际服务请求。
-
-> **说明**：未配置 `secrets.properties` 时项目仍可正常编译，但构建出的 APK 因缺少必要参数无法连接服务端。
+缺少该文件仍可编译，但登录会失败（网关为空）。
 
 ### 构建命令
 
 ```bash
-# JVM 单元测试
-./gradlew testDebugUnitTest
-
-# Debug APK
-./gradlew assembleDebug
-
-# 正式 Release（需设置签名环境变量）
-./gradlew assembleRelease
+cd minimal
+./gradlew :app:assembleDebug      # 产物：app/build/outputs/apk/debug/
+./gradlew :app:assembleRelease    # 产物：app/build/outputs/apk/release/
 ```
 
-Release 签名环境变量：`ANDROID_KEYSTORE_PATH`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。不要提交密钥或密码。
+### CI
 
-GitHub PR 验证使用示例配置，不需要真实服务参数；标签发布还需配置上述五项 API Secrets，以及 `ANDROID_KEYSTORE_BASE64` 和三个签名密码 / 别名 Secrets。推送 `v*` 标签会触发发布流水线，已有同名 Release 时流水线不会替换其附件。
+`.github/workflows/minimal.yml` 在推送 `dev` / `main` 的 `minimal/**` 改动时构建，
+推送 `v*` 标签时自动创建 Release 并附上 APK。
 
-APK 默认输出位置：
+需在仓库 Settings → Secrets 配置：
 
-```text
-app/build/outputs/apk/debug/app-debug.apk
-app/build/outputs/apk/release/app-release.apk
+| Secret | 用途 |
+|---|---|
+| `API_GATEWAY` | API 网关，形如 `https://<host>/api/v1` |
+| `APP_SIGN_SALT` | 登录签名盐值 |
+| `KEYSTORE_BASE64` | 签名 keystore 的 base64 |
+| `KEYSTORE_PASSWORD` | keystore 密码 |
+| `KEY_ALIAS` | 密钥别名 |
+
+---
+
+## 代码结构
+
+```
+minimal/
+├── settings.gradle.kts
+├── build.gradle.kts
+└── app/src/main/
+    ├── AndroidManifest.xml
+    ├── java/com/life798/mini/
+    │   ├── App.kt              入口，只初始化日志
+    │   ├── MainActivity.kt     单 Activity，三屏切换
+    │   ├── core/               AppLog、Prefs、数据模型
+    │   ├── net/                OkHttp 客户端、MD5 签名
+    │   ├── scan/               ZXing 解码器、二维码解析
+    │   └── ui/                 Compose 界面与 ViewModel
+    └── res/
 ```
 
-## 隐私与数据
+10 个 Kotlin 文件，约 1500 行。依赖 10 个，全部是 AndroidX / OkHttp / ZXing / CameraX。
 
-应用的账户和设备配置保存在本机。请不要将设备控制登录信息、账户数据或二维码内容分享给他人。
+### 扫码实现
 
-## 致谢与第三方项目
+不依赖 ML Kit（国产设备可能没有 Google Play 服务），改用 ZXing 纯 Java 解码，代价是自己处理帧：
 
-- [miuix](https://github.com/compose-miuix-ui/miuix)：使用 `miuix-ui` 的下拉刷新组件和 `miuix-blur` 的模糊能力，并在应用内适配刷新布局与状态衔接；Apache-2.0 License。
-- [QuickieExtended](https://github.com/T8RIN/QuickieExtended)：提供基于 CameraX 与 ML Kit 的二维码扫描能力；MIT License。
-- 感谢 [wasdwx](https://github.com/wasdwx) 在 [PR #5](https://github.com/nocookies111/life-798/pull/5) 中贡献底部导航栏避让系统导航栏的修复。
-- 感谢 [zhuying66](https://github.com/zhuying66) 在 [PR #22](https://github.com/nocookies111/life-798/pull/22) 中提出刷新验证码后的焦点改进；已结合异步加载流程适配整合。
-- 感谢 [luckjokerwang](https://github.com/luckjokerwang) 在 [PR #24](https://github.com/nocookies111/life-798/pull/24) 中提供官方版本兼容问题的分析与修复建议；当前修复由本项目独立分析实现，未直接合并该 PR。
+- 直接读 Y 平面当灰度图，跳过 YUV→RGB 转换
+- 只解码画面中心 60%×60%，降低单帧耗时
+- 处理 `rowStride` 填充，否则宽度对不齐会整帧解不出来
+- 旋转在数据层完成（90/180/270），因为 `PlanarYUVLuminanceSource` 不支持旋转
 
-上述项目及其代码继续遵循各自的许可证，本项目的 MIT License 不替代其许可证。
+---
+
+## 隐私
+
+- 账户信息、设备编号只保存在本机
+- 无统计、无埋点、无崩溃上报
+- 应用内日志只写本地文件，需手动导出才会离开设备；token 与手机号在日志中已脱敏
+
+---
+
+## 上游
+
+本项目 fork 自 [nocookies111/life-798](https://github.com/nocookies111/life-798)。
+
+仓库中 `app/` 与 `src/` 仍保留上游 WaterWidget 的源码；`minimal/` 是本项目的精简实现，两者互不影响，可分别构建。
+
+---
 
 ## 免责声明
 
-本项目按现状提供，不对可用性、准确性或使用结果作任何保证，使用风险由使用者自行承担；不免除或限制法律规定不得免除或限制的责任。
+非官方项目，与慧生活798服务提供方无关。
+
+请仅使用你本人有权访问的账户和设备，并遵守相关服务规则。
+本项目按现状提供，不对可用性、准确性作任何保证，使用风险由使用者自行承担。
+
+---
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。
+[MIT](LICENSE)
