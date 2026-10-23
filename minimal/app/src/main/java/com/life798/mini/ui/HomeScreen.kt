@@ -46,7 +46,8 @@ fun HomeScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onLogout: () -> Unit,
-    onClearMessage: () -> Unit
+    onClearMessage: () -> Unit,
+    onOpenLog: () -> Unit
 ) {
     var toast by remember { mutableStateOf<String?>(null) }
 
@@ -79,8 +80,13 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            TextButton(onClick = onLogout) {
-                Text("退出登录", fontSize = 13.sp)
+            Row {
+                TextButton(onClick = onOpenLog) {
+                    Text("日志", fontSize = 13.sp)
+                }
+                TextButton(onClick = onLogout) {
+                    Text("退出登录", fontSize = 13.sp)
+                }
             }
         }
 

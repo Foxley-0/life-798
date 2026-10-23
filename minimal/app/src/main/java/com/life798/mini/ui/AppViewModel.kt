@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.life798.mini.core.ApiResult
+import com.life798.mini.core.AppLog
 import com.life798.mini.core.Prefs
 import com.life798.mini.net.WaterApi
 import com.life798.mini.scan.QrParser
@@ -80,18 +81,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _ui.value = _ui.value.copy(captchaLoading = true, captchaError = null)
             val key = randomKey()
             when (val r = api.captcha(key)) {
-                is ApiResult.Ok -> _ui.value = _ui.value.copy(
-                    captchaLoading = false,
-                    captchaKey = key,
-                    captchaImage = r.data,
-                    captchaError = null
-                )
+                is ApiResult.Ok -> {
+                    AppLog.i("Login", "验证码已加载 ${r.data.size}B")
+                    _ui.value = _ui.value.copy(
+                        captchaLoading = false,
+                        captchaKey = key,
+                        captchaImage = r.data,
+                        captchaError = null
+                    )
+                }
 
-                is ApiResult.Err -> _ui.value = _ui.value.copy(
-                    captchaLoading = false,
-                    captchaImage = null,
-                    captchaError = r.message
-                )
+                is ApiResult.Err -> {
+                    AppLog.w("Login", "验证码加载失败: ${r.message}")
+                    _ui.value = _ui.value.copy(
+                        captchaLoading = false,
+                        captchaImage = null,
+                        captchaError = r.message
+                    )
+                }
             }
         }
     }
@@ -105,11 +112,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _ui.value = _ui.value.copy(busy = true, message = null)
             when (val r = api.sendSms(phone.trim(), graphCode.trim(), _ui.value.captchaKey)) {
                 is ApiResult.Ok -> {
+                    AppLog.i("Login", "短信已发送 → ${AppLog.maskPhone(phone)}")
                     _ui.value = _ui.value.copy(busy = false, message = "验证码已发送")
                     startSmsCountdown()
                 }
 
                 is ApiResult.Err -> {
+                    AppLog.w("Login", "发送短信失败: ${r.message}")
                     _ui.value = _ui.value.copy(busy = false, message = r.message)
                     refreshCaptcha()
                 }
@@ -128,9 +137,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     val session = r.data
                     val uid = when (val info = api.viewInfo(session.token)) {
                         is ApiResult.Ok -> info.data
-                        is ApiResult.Err -> ""
+                        is ApiResult.Err -> {
+                            AppLog.w("Login", "取 uid 失败: ${info.message}")
+                            ""
+                        }
                     }
                     prefs.saveSession(session.token, uid, session.phone)
+                    AppLog.i(
+                        "Login",
+                        "登录成功 uid=$uid token=${AppLog.mask(session.token)}"
+                    )
                     _ui.value = _ui.value.copy(
                         busy = false,
                         token = session.token,
@@ -140,6 +156,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 is ApiResult.Err -> {
+                    AppLog.w("Login", "登录失败: ${r.message} (code=${r.code})")
                     _ui.value = _ui.value.copy(busy = false, message = r.message)
                 }
             }
@@ -157,16 +174,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------- 设备 ----------------
 
-    fun onQrDecoded(raw: String) {
+    /**
+     * 扫码结果处理。
+     * @return true 表示已解析出设备编号（调用方可以离开扫码页）
+     */
+    fun onQrDecoded(raw: String): Boolean {
+        AppLog.i("Scan", "二维码原文: ${raw.take(120)}")
         val id = QrParser.extract(raw)
         if (id == null) {
-            note("二维码里没有识别到设备编号")
-            return
+            AppLog.w("Scan", "解析失败，原文长度=${raw.length}")
+            note("无法识别为设备编号：${raw.take(40)}")
+            return false
         }
+        AppLog.i("Scan", "设备编号=$id")
         viewModelScope.launch {
             prefs.saveDevice(id)
             _ui.value = _ui.value.copy(deviceId = id, message = "已识别设备 $id")
         }
+        return true
     }
 
     fun startDevice() {
@@ -178,6 +203,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _ui.value = _ui.value.copy(busy = true, message = null)
             when (val r = api.devStart(s.token, s.deviceId)) {
                 is ApiResult.Ok -> {
+                    AppLog.i("Device", "启动成功 did=${s.deviceId}")
                     _ui.value = _ui.value.copy(
                         busy = false,
                         running = true,
@@ -189,6 +215,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 is ApiResult.Err -> {
+                    AppLog.w("Device", "启动失败 did=${s.deviceId}: ${r.message} code=${r.code}")
                     _ui.value = _ui.value.copy(busy = false, message = r.message)
                     if (r.code == -99) logout()
                 }
@@ -204,6 +231,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _ui.value = _ui.value.copy(busy = true, message = null)
             when (val r = api.devEnd(s.token, s.deviceId)) {
                 is ApiResult.Ok -> {
+                    AppLog.i("Device", "停止成功 did=${s.deviceId}")
                     stopTicker()
                     _ui.value = _ui.value.copy(
                         busy = false,
@@ -215,6 +243,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 is ApiResult.Err -> {
+                    AppLog.w("Device", "停止失败 did=${s.deviceId}: ${r.message} code=${r.code}")
                     _ui.value = _ui.value.copy(busy = false, message = r.message)
                     if (r.code == -99) logout()
                 }

@@ -11,8 +11,8 @@ package com.life798.mini.scan
  */
 object QrParser {
 
-    /** 编号允许的字符集：字母、数字、下划线、连字符。 */
-    private val PLAIN = Regex("^[A-Za-z0-9_-]{4,64}$")
+    /** 编号允许的字符集：字母、数字、下划线、连字符。长度放宽到 2，避免短编号被误判失败。 */
+    private val PLAIN = Regex("^[A-Za-z0-9_-]{2,64}$")
 
     /** 优先尝试的参数名，顺序即优先级。 */
     private val PREFERRED_KEYS = listOf("id", "q", "did", "deviceId", "device_id", "device", "code", "sn")

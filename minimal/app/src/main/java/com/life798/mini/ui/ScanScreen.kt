@@ -3,6 +3,9 @@ package com.life798.mini.ui
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
+import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -15,10 +18,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -26,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,8 +92,19 @@ fun ScanScreen(
     }
 
     val executor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
+    // 相机线程不能直接写 Compose 状态，统一 post 回主线程
+    val latestOnDecoded by rememberUpdatedState(onDecoded)
+
+    var frames by remember { mutableStateOf(0) }
+    var hits by remember { mutableStateOf(0) }
+
     val analyzer = remember {
-        QrAnalyzer { text -> onDecoded(text) }
+        QrAnalyzer(
+            onDecoded = { text -> mainHandler.post { latestOnDecoded(text) } },
+            onStats = { f, h -> mainHandler.post { frames = f; hits = h } }
+        )
     }
 
     var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
@@ -103,6 +119,8 @@ fun ScanScreen(
         }
         val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            // 限制帧尺寸：不设的话默认可能到 1080p 以上，逐像素旋转 + 大图解码会慢到扫不出来
+            .setTargetResolution(Size(1280, 720))
             .build()
             .also { it.setAnalyzer(executor, analyzer) }
 
@@ -166,8 +184,16 @@ fun ScanScreen(
                     fontSize = 15.sp,
                     modifier = Modifier.padding(top = 32.dp)
                 )
-                Button(onClick = onBack, modifier = Modifier.padding(bottom = 24.dp)) {
-                    Text("返回")
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "已处理 $frames 帧 · 识别 $hits 次",
+                        color = Color.White.copy(alpha = 0.65f),
+                        fontSize = 11.sp
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = onBack) {
+                        Text("返回")
+                    }
                 }
             }
         } else {

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 导出的日志放在应用专属外部目录，无需存储权限 -->
+    <external-files-path
+        name="logs"
+        path="logs/" />
+    <files-path
+        name="internal_logs"
+        path="logs/" />
+</paths>

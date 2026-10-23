@@ -2,6 +2,7 @@ package com.life798.mini.net
 
 import com.life798.mini.BuildConfig
 import com.life798.mini.core.ApiResult
+import com.life798.mini.core.AppLog
 import com.life798.mini.core.Session
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -153,20 +154,29 @@ class WaterApi(
         }
 
     private fun <T> call(req: Request, transform: (JSONObject) -> T): ApiResult<T> {
+        val query = req.url.query
+        val target = req.url.encodedPath + if (query.isNullOrBlank()) "" else "?$query"
+        AppLog.d("Api", "${req.method} $target")
+
         val response: Response = try {
             client.newCall(req).execute()
         } catch (e: Exception) {
+            AppLog.e("Api", "请求失败 $target", e)
             return ApiResult.Err("网络异常：${e.message ?: "无法连接服务器"}")
         }
 
         return response.use { resp ->
             val text = resp.body?.string().orEmpty()
+            AppLog.d("Api", "← ${resp.code} ${AppLog.preview(text, 300)}")
+
             if (text.isBlank()) {
+                AppLog.w("Api", "响应为空 HTTP ${resp.code}")
                 return@use ApiResult.Err("服务端返回为空（HTTP ${resp.code}）")
             }
             val json = try {
                 JSONObject(text)
             } catch (e: Exception) {
+                AppLog.e("Api", "JSON 解析失败", e)
                 return@use ApiResult.Err("响应解析失败")
             }
             val code = json.optInt("code", Int.MIN_VALUE)
@@ -177,11 +187,13 @@ class WaterApi(
                     raw.isNotBlank() -> raw
                     else -> "请求失败（code=$code）"
                 }
+                AppLog.w("Api", "业务失败 code=$code msg=$raw")
                 return@use ApiResult.Err(msg, code)
             }
             try {
                 ApiResult.Ok(transform(json))
             } catch (e: Exception) {
+                AppLog.e("Api", "数据解析异常", e)
                 ApiResult.Err(e.message ?: "数据异常")
             }
         }

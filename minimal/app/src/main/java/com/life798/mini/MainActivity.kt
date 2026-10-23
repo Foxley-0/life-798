@@ -21,11 +21,12 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.life798.mini.ui.AppViewModel
 import com.life798.mini.ui.HomeScreen
+import com.life798.mini.ui.LogScreen
 import com.life798.mini.ui.LoginScreen
 import com.life798.mini.ui.MiniTheme
 import com.life798.mini.ui.ScanScreen
 
-private enum class Screen { HOME, SCAN }
+private enum class Screen { HOME, SCAN, LOG }
 
 class MainActivity : ComponentActivity() {
 
@@ -62,9 +63,15 @@ class MainActivity : ComponentActivity() {
                         screen == Screen.SCAN.name -> ScanScreen(
                             onBack = { screen = Screen.HOME.name },
                             onDecoded = { raw ->
-                                vm.onQrDecoded(raw)
-                                screen = Screen.HOME.name
+                                // 只有解析成功才离开扫码页，失败留在原页并给出提示
+                                if (vm.onQrDecoded(raw)) {
+                                    screen = Screen.HOME.name
+                                }
                             }
+                        )
+
+                        screen == Screen.LOG.name -> LogScreen(
+                            onBack = { screen = Screen.HOME.name }
                         )
 
                         else -> HomeScreen(
@@ -73,7 +80,8 @@ class MainActivity : ComponentActivity() {
                             onStart = vm::startDevice,
                             onStop = vm::stopDevice,
                             onLogout = vm::logout,
-                            onClearMessage = vm::clearMessage
+                            onClearMessage = vm::clearMessage,
+                            onOpenLog = { screen = Screen.LOG.name }
                         )
                     }
                 }
