@@ -2,14 +2,19 @@ name: Build Minimal APK
 
 on:
   push:
-    branches: [ dev ]
+    branches: [ dev, main ]
     paths:
       - 'minimal/**'
       - '.github/workflows/minimal.yml'
+    tags:
+      - 'v*'
   pull_request:
     paths:
       - 'minimal/**'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -116,3 +121,44 @@ jobs:
           name: life798-mini-release
           path: minimal/app/build/outputs/apk/release/*.apk
           if-no-files-found: ignore
+
+      # ---------- 以下仅在推送 v* 标签时执行 ----------
+
+      - name: Stage APK for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/debug/app-debug.apk "out/798-mini-${GITHUB_REF_NAME}.apk"
+          ls -la out/
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 798 小助手 ${{ github.ref_name }}
+          fail_on_unmatched_files: false
+          body: |
+            **798 小助手 ${{ github.ref_name }}**
+
+            慧生活798 的极度精简客户端，只做一件事：扫码启动用水设备。
+
+            ## 功能
+            - 手机号 + 图形验证码 + 短信验证码登录
+            - 扫描设备二维码，自动提取设备编号
+            - 一键启动设备
+            - 启动后在设备本体上结算（服务端限制，App 无法停止）
+
+            ## 不提供
+            钱包、积分、多任务签到、多账户、小部件、快捷磁贴、消费统计、推送、广告、埋点、崩溃上报。
+
+            ## 安装
+            下载下方 APK 直接安装。需 Android 8.0 及以上，首次使用需登录。
+
+            ## 说明
+            - 非官方项目，与服务提供方无关
+            - 请仅使用你本人有权访问的账户和设备
+          files: |
+            minimal/out/*.apk
+            minimal/app/build/outputs/apk/release/*.apk
+          draft: false
+          prerelease: false
