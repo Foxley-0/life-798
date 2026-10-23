@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
-import android.util.Size
+import android.util.Size as AndroidSize
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -120,7 +120,7 @@ fun ScanScreen(
         val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             // 限制帧尺寸：不设的话默认可能到 1080p 以上，逐像素旋转 + 大图解码会慢到扫不出来
-            .setTargetResolution(Size(1280, 720))
+            .setTargetResolution(AndroidSize(1280, 720))
             .build()
             .also { it.setAnalyzer(executor, analyzer) }
 
