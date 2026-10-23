@@ -44,29 +44,40 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // 签名：CI 通过环境变量注入固定 keystore；本地缺省时回落到系统 debug 签名。
+    // debug 与 release 共用同一签名，保证两个构建产物可以互相覆盖安装。
+    val ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+    val ksPass = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    val ksAlias = System.getenv("ANDROID_KEY_ALIAS")
+    val ksKeyPass = System.getenv("ANDROID_KEY_PASSWORD")
+    val ksFile = ksPath?.takeIf { it.isNotBlank() }?.let { file(it) }
+    val hasCustomSigning = ksFile != null && ksFile.exists() &&
+        !ksPass.isNullOrBlank() && !ksAlias.isNullOrBlank() && !ksKeyPass.isNullOrBlank()
+
+    signingConfigs {
+        if (hasCustomSigning) {
+            create("custom") {
+                storeFile = ksFile
+                storePassword = ksPass
+                keyAlias = ksAlias
+                keyPassword = ksKeyPass
+            }
+        }
+    }
+
     buildTypes {
+        getByName("debug") {
+            if (hasCustomSigning) signingConfig = signingConfigs.getByName("custom")
+        }
+
         getByName("release") {
+            if (hasCustomSigning) signingConfig = signingConfigs.getByName("custom")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // CI 若提供签名环境变量则签 release，否则回落到 debug 签名（仍可安装）。
-            val storePath = System.getenv("ANDROID_KEYSTORE_PATH")
-            val storePass = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-            val alias = System.getenv("ANDROID_KEY_ALIAS")
-            val keyPass = System.getenv("ANDROID_KEY_PASSWORD")
-            if (!storePath.isNullOrBlank() && !storePass.isNullOrBlank() &&
-                !alias.isNullOrBlank() && !keyPass.isNullOrBlank()
-            ) {
-                signingConfig = signingConfigs.create("release") {
-                    storeFile = file(storePath)
-                    storePassword = storePass
-                    keyAlias = alias
-                    keyPassword = keyPass
-                }
-            }
         }
     }
 }
