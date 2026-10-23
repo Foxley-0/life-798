@@ -129,6 +129,9 @@ jobs:
         run: |
           mkdir -p out
           cp app/build/outputs/apk/debug/app-debug.apk "out/798-mini-${GITHUB_REF_NAME}.apk"
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "out/798-mini-${GITHUB_REF_NAME}-release.apk"
+          fi
           ls -la out/
 
       - name: Publish Release
@@ -154,11 +157,14 @@ jobs:
             ## 安装
             下载下方 APK 直接安装。需 Android 8.0 及以上，首次使用需登录。
 
+            两个包功能相同，任选其一：
+            - `798-mini-<版本>.apk`：debug 构建，体积较大，兼容性最稳
+            - `798-mini-<版本>-release.apk`：R8 优化，体积约为前者六分之一
+
             ## 说明
             - 非官方项目，与服务提供方无关
             - 请仅使用你本人有权访问的账户和设备
           files: |
             minimal/out/*.apk
-            minimal/app/build/outputs/apk/release/*.apk
           draft: false
           prerelease: false
