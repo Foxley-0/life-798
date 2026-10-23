@@ -54,6 +54,13 @@ class QrAnalyzer(
         try {
             if (paused) return
 
+            if (frames == 0) {
+                AppLog.i(
+                    "Scan",
+                    "首帧 ${image.width}x${image.height} rot=${image.imageInfo.rotationDegrees}"
+                )
+            }
+
             val gray = toGrayscale(image)
             if (gray != null) {
                 val rotated = rotate(gray.data, gray.width, gray.height, image.imageInfo.rotationDegrees)
@@ -91,6 +98,9 @@ class QrAnalyzer(
         // ---- 以下在 try 之外，异常不再被上面的 catch 吞掉 ----
 
         frames++
+        if (frames % PROGRESS_EVERY == 0) {
+            AppLog.i("Scan", "已处理 $frames 帧，识别 $hits 次")
+        }
         if (frames % STATS_EVERY == 0) {
             try {
                 onStats(frames, hits)
@@ -198,7 +208,10 @@ class QrAnalyzer(
         const val MIN_SIDE = 64
         const val DEDUPE_MS = 2000L
 
-        /** 每处理多少帧回报一次进度。 */
+        /** 每处理多少帧回报一次进度（给界面用）。 */
         const val STATS_EVERY = 20
+
+        /** 每处理多少帧记录一条日志（比界面回调低频，避免刷屏）。 */
+        const val PROGRESS_EVERY = 200
     }
 }

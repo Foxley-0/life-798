@@ -29,32 +29,36 @@ object QrParser {
     }
 
     private fun extractFromUrl(text: String): String? {
-        val query = runCatching {
+        val uri = runCatching {
             // 兼容没有 scheme 的裸域名写法
-            val normalized = if (text.contains("://")) text else "https://$text"
-            java.net.URI(normalized).rawQuery
+            java.net.URI(if (text.contains("://")) text else "https://$text")
         }.getOrNull() ?: return null
 
-        val params = LinkedHashMap<String, String>()
-        for (pair in query.split('&')) {
-            val idx = pair.indexOf('=')
-            if (idx <= 0) continue
-            val key = pair.substring(0, idx)
-            val value = pair.substring(idx + 1)
-            if (value.isNotBlank()) params.putIfAbsent(key, value)
-        }
-        if (params.isEmpty()) return null
+        // 1. query 参数形态：?id=123 / ?q=abc
+        val query = uri.rawQuery
+        if (!query.isNullOrBlank()) {
+            val params = LinkedHashMap<String, String>()
+            for (pair in query.split('&')) {
+                val idx = pair.indexOf('=')
+                if (idx <= 0) continue
+                val key = pair.substring(0, idx)
+                val value = pair.substring(idx + 1)
+                if (value.isNotBlank()) params.putIfAbsent(key, value)
+            }
 
-        // 优先按约定字段名取
-        for (key in PREFERRED_KEYS) {
-            val value = params[key]
-            if (value != null && PLAIN.matches(value)) return value
+            for (key in PREFERRED_KEYS) {
+                val value = params[key]
+                if (value != null && PLAIN.matches(value)) return value
+            }
+            for (value in params.values) {
+                if (PLAIN.matches(value)) return value
+            }
         }
 
-        // 兜底：任何形似编号的参数值
-        for (value in params.values) {
-            if (PLAIN.matches(value)) return value
-        }
+        // 2. 路径形态：/q/1/863781055950423 —— 取最后一段
+        val lastSegment = uri.path.orEmpty().trimEnd('/').substringAfterLast('/')
+        if (PLAIN.matches(lastSegment)) return lastSegment
+
         return null
     }
 }

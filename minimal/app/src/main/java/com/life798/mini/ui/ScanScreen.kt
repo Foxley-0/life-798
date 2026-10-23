@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.life798.mini.core.AppLog
 import com.life798.mini.scan.QrAnalyzer
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.ExecutorService
@@ -59,11 +60,14 @@ import kotlin.math.min
  */
 @Composable
 fun ScanScreen(
+    state: UiState,
     onBack: () -> Unit,
     onDecoded: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(Unit) { AppLog.i("Scan", "进入扫码页") }
 
     var granted by remember {
         mutableStateOf(
@@ -78,6 +82,7 @@ fun ScanScreen(
     ) { ok ->
         granted = ok
         denied = !ok
+        AppLog.i("Scan", "相机权限: ${if (ok) "已授予" else "被拒绝"}")
     }
 
     LaunchedEffect(Unit) {
@@ -132,6 +137,10 @@ fun ScanScreen(
                 preview,
                 analysis
             )
+        }.onSuccess {
+            AppLog.i("Scan", "相机已绑定")
+        }.onFailure {
+            AppLog.e("Scan", "相机绑定失败", it)
         }
     }
 
@@ -140,6 +149,7 @@ fun ScanScreen(
             analyzer.paused = true
             runCatching { provider?.unbindAll() }
             executor.shutdown()
+            AppLog.i("Scan", "退出扫码页")
         }
     }
 
@@ -185,6 +195,15 @@ fun ScanScreen(
                     modifier = Modifier.padding(top = 32.dp)
                 )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    state.message?.let { msg ->
+                        Text(
+                            text = msg,
+                            color = Color(0xFFFF8A80),
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(bottom = 10.dp)
+                        )
+                    }
                     Text(
                         text = "已处理 $frames 帧 · 识别 $hits 次",
                         color = Color.White.copy(alpha = 0.65f),
