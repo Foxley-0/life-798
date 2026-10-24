@@ -8,6 +8,7 @@ import com.life798.mini.core.AppLog
 import com.life798.mini.core.Prefs
 import com.life798.mini.net.WaterApi
 import com.life798.mini.scan.QrParser
+import com.life798.mini.scan.QrResult
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -171,22 +172,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 扫码结果处理。
-     * @return true 表示已解析出设备编号（调用方可以离开扫码页）
+     * @return true 表示已解析出慧生活798 的设备编号（调用方可以离开扫码页）
      */
     fun onQrDecoded(raw: String): Boolean {
         AppLog.i("Scan", "二维码原文: ${raw.take(120)}")
-        val id = QrParser.extract(raw)
-        if (id == null) {
-            AppLog.w("Scan", "解析失败，原文长度=${raw.length}")
-            note("无法识别为设备编号：${raw.take(40)}")
-            return false
+
+        return when (val r = QrParser.parse(raw)) {
+            is QrResult.Ok -> {
+                AppLog.i("Scan", "设备编号=${r.deviceId} host=${r.host.ifBlank { "(纯编号)" }}")
+                viewModelScope.launch {
+                    prefs.saveDevice(r.deviceId)
+                    _ui.value = _ui.value.copy(
+                        deviceId = r.deviceId,
+                        message = "已识别设备 ${r.deviceId}"
+                    )
+                }
+                true
+            }
+
+            is QrResult.WrongPlatform -> {
+                AppLog.w("Scan", "非慧生活798设备 host=${r.host}")
+                note("非慧生活798设备，请使用对应 App 扫码")
+                false
+            }
+
+            is QrResult.Unrecognized -> {
+                AppLog.w("Scan", "无法识别，原文长度=${r.raw.length}")
+                note("无法识别的二维码：${r.raw.take(30)}")
+                false
+            }
         }
-        AppLog.i("Scan", "设备编号=$id")
-        viewModelScope.launch {
-            prefs.saveDevice(id)
-            _ui.value = _ui.value.copy(deviceId = id, message = "已识别设备 $id")
-        }
-        return true
     }
 
     fun startDevice() {

@@ -62,7 +62,11 @@ class MainActivity : ComponentActivity() {
 
                         screen == Screen.SCAN.name -> ScanScreen(
                             state = state,
-                            onBack = { screen = Screen.HOME.name },
+                            onBack = {
+                                // 扫码页的错误提示不要带回首页
+                                vm.clearMessage()
+                                screen = Screen.HOME.name
+                            },
                             onDecoded = { raw ->
                                 // 只有解析成功才离开扫码页，失败留在原页并给出提示
                                 if (vm.onQrDecoded(raw)) {
