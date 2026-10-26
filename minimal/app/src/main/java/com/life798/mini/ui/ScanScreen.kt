@@ -1,62 +1,40 @@
 package com.life798.mini.ui
 
-import android.Manifest
-import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Handler
-import android.os.Looper
-import android.util.Size as AndroidSize
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import com.life798.mini.core.AppLog
-import com.life798.mini.scan.QrAnalyzer
-import kotlinx.coroutines.suspendCancellableCoroutine
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.math.min
 
 /**
- * 扫码页：CameraX 实时预览 + 中心取景框。
- * 扫到即回调，由上层决定是否关闭本页。
+ * 扫码页。
+ *
+ * 不再自己处理相机帧，改用 zxing-android-embedded 的 CaptureActivity：
+ * 对焦、曝光、旋转、二值化全部由成熟库负责，识别率和稳定性远高于手写实现。
+ *
+ * 本页只做三件事：启动扫码、展示上一次的结果、允许重扫。
  */
 @Composable
 fun ScanScreen(
@@ -64,201 +42,72 @@ fun ScanScreen(
     onBack: () -> Unit,
     onDecoded: (String) -> Unit
 ) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    var scanRound by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) { AppLog.i("Scan", "进入扫码页") }
-
-    var granted by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED
-        )
-    }
-    var denied by remember { mutableStateOf(false) }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { ok ->
-        granted = ok
-        denied = !ok
-        AppLog.i("Scan", "相机权限: ${if (ok) "已授予" else "被拒绝"}")
-    }
-
-    LaunchedEffect(Unit) {
-        if (!granted) permissionLauncher.launch(Manifest.permission.CAMERA)
-    }
-
-    val previewView = remember {
-        PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FILL_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        }
-    }
-
-    val executor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
-    val mainHandler = remember { Handler(Looper.getMainLooper()) }
-
-    // 相机线程不能直接写 Compose 状态，统一 post 回主线程
-    val latestOnDecoded by rememberUpdatedState(onDecoded)
-
-    var frames by remember { mutableStateOf(0) }
-    var hits by remember { mutableStateOf(0) }
-
-    val analyzer = remember {
-        QrAnalyzer(
-            onDecoded = { text -> mainHandler.post { latestOnDecoded(text) } },
-            onStats = { f, h -> mainHandler.post { frames = f; hits = h } }
-        )
-    }
-
-    var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
-
-    LaunchedEffect(granted) {
-        if (!granted) return@LaunchedEffect
-        val cameraProvider = runCatching { awaitCameraProvider(context) }.getOrNull() ?: return@LaunchedEffect
-        provider = cameraProvider
-
-        val preview = Preview.Builder().build().also {
-            it.setSurfaceProvider(previewView.surfaceProvider)
-        }
-        val analysis = ImageAnalysis.Builder()
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            // 限制帧尺寸：不设的话默认可能到 1080p 以上，逐像素旋转 + 大图解码会慢到扫不出来
-            .setTargetResolution(AndroidSize(1280, 720))
-            .build()
-            .also { it.setAnalyzer(executor, analyzer) }
-
-        runCatching {
-            cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                CameraSelector.DEFAULT_BACK_CAMERA,
-                preview,
-                analysis
-            )
-        }.onSuccess {
-            AppLog.i("Scan", "相机已绑定")
-        }.onFailure {
-            AppLog.e("Scan", "相机绑定失败", it)
-        }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            analyzer.paused = true
-            runCatching { provider?.unbindAll() }
-            executor.shutdown()
-            AppLog.i("Scan", "退出扫码页")
-        }
-    }
-
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        if (granted) {
-            AndroidView(
-                factory = { previewView },
-                modifier = Modifier.fillMaxSize()
-            )
-
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val side = min(size.width, size.height) * 0.68f
-                val left = (size.width - side) / 2f
-                val top = (size.height - side) / 2f
-                val dim = Color.Black.copy(alpha = 0.55f)
-
-                // 四周压暗
-                drawRect(dim, size = Size(size.width, top))
-                drawRect(dim, topLeft = Offset(0f, top + side), size = Size(size.width, size.height - top - side))
-                drawRect(dim, topLeft = Offset(0f, top), size = Size(left, side))
-                drawRect(dim, topLeft = Offset(left + side, top), size = Size(size.width - left - side, side))
-
-                // 取景框
-                drawRect(
-                    color = Color.White,
-                    topLeft = Offset(left, top),
-                    size = Size(side, side),
-                    style = Stroke(width = 3f)
-                )
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "将设备二维码放入框内",
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    modifier = Modifier.padding(top = 32.dp)
-                )
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    state.message?.let { msg ->
-                        Text(
-                            text = msg,
-                            color = Color(0xFFFF8A80),
-                            fontSize = 12.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(bottom = 10.dp)
-                        )
-                    }
-                    Text(
-                        text = "已处理 $frames 帧 · 识别 $hits 次",
-                        color = Color.White.copy(alpha = 0.65f),
-                        fontSize = 11.sp
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = onBack) {
-                        Text("返回")
-                    }
-                }
-            }
+    val launcher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val contents = result.contents
+        AppLog.i("Scan", "扫码返回: ${contents?.take(100) ?: "(用户取消)"}")
+        if (contents.isNullOrBlank()) {
+            onBack()
         } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = if (denied) "需要相机权限才能扫码" else "正在请求相机权限…",
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    textAlign = TextAlign.Center
-                )
-                if (denied) {
-                    Button(
-                        onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                        modifier = Modifier.padding(top = 20.dp)
-                    ) {
-                        Text("重新授权")
-                    }
-                    Button(
-                        onClick = onBack,
-                        modifier = Modifier.padding(top = 8.dp)
-                    ) {
-                        Text("返回")
-                    }
-                }
+            onDecoded(contents)
+        }
+    }
+
+    // 进入页面即拉起扫码；点「重新扫描」递增计数再次拉起
+    LaunchedEffect(scanRound) {
+        AppLog.i("Scan", "拉起扫码 round=$scanRound")
+        launcher.launch(
+            ScanOptions().apply {
+                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                setPrompt("将设备二维码放入框内")
+                setBeepEnabled(false)
+                setOrientationLocked(true)
+                setBarcodeImageEnabled(false)
             }
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(text = "扫码已结束", fontSize = 16.sp)
+
+        state.message?.let { msg ->
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = msg,
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Button(
+            onClick = { scanRound++ },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+        ) {
+            Text("重新扫描")
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        OutlinedButton(
+            onClick = onBack,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+        ) {
+            Text("返回")
         }
     }
 }
-
-private suspend fun awaitCameraProvider(context: Context): ProcessCameraProvider =
-    suspendCancellableCoroutine { cont ->
-        val future = ProcessCameraProvider.getInstance(context)
-        future.addListener(
-            {
-                try {
-                    cont.resume(future.get())
-                } catch (e: Exception) {
-                    cont.resumeWithException(e)
-                }
-            },
-            ContextCompat.getMainExecutor(context)
-        )
-    }

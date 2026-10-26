@@ -102,11 +102,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
 
-    // 相机 + 解码：CameraX 取帧，ZXing 纯 Java 解码，不依赖 Google Play 服务。
-    implementation("androidx.camera:camera-core:1.4.0")
-    implementation("androidx.camera:camera-camera2:1.4.0")
-    implementation("androidx.camera:camera-lifecycle:1.4.0")
-    implementation("androidx.camera:camera-view:1.4.0")
+    // 扫码：用成熟封装库，避免自己处理帧旋转/裁剪/二值化
+    // 纯 Java 实现，不依赖 Google Play 服务
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("com.google.zxing:core:3.5.3")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

@@ -13,6 +13,7 @@
 -keep class com.google.zxing.** { *; }
 -dontwarn com.google.zxing.**
 
-# CameraX 内部通过反射加载实现类
--keep class androidx.camera.** { *; }
--dontwarn androidx.camera.**
+# zxing-android-embedded：CaptureActivity 由 manifest 引用，
+# 内部还会通过反射构造 View 与解码器，整包保留最稳妥。
+-keep class com.journeyapps.** { *; }
+-dontwarn com.journeyapps.**
