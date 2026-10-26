@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -49,6 +50,7 @@ fun HomeScreen(
     onOpenLog: () -> Unit
 ) {
     var toast by remember { mutableStateOf<String?>(null) }
+    var showConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.message) {
         toast = state.message
@@ -132,8 +134,9 @@ fun HomeScreen(
         Spacer(Modifier.height(32.dp))
 
         // 只有启动。设备启动后由用户在设备本体上结算，App 不提供停止与计时。
+        // 启动会产生实际消费，先弹窗确认，避免误触。
         Button(
-            onClick = onStart,
+            onClick = { showConfirm = true },
             enabled = !state.busy && state.deviceId.isNotBlank(),
             modifier = Modifier
                 .fillMaxWidth()
@@ -148,6 +151,30 @@ fun HomeScreen(
             } else {
                 Text("启 动", fontSize = 17.sp)
             }
+        }
+
+        if (showConfirm) {
+            AlertDialog(
+                onDismissRequest = { showConfirm = false },
+                title = { Text("启动设备") },
+                text = {
+                    Text(
+                        "设备编号：${state.deviceId}\n\n" +
+                            "启动后请在设备上使用，用完在设备上结算。"
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showConfirm = false
+                            onStart()
+                        }
+                    ) { Text("确认启动") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showConfirm = false }) { Text("取消") }
+                }
+            )
         }
 
         Spacer(Modifier.height(16.dp))

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.life798.mini.core.AppLog
+import com.life798.mini.scan.SquareCaptureActivity
 
 /**
  * 扫码页。
@@ -64,6 +65,8 @@ fun ScanScreen(
                 setBeepEnabled(false)
                 setOrientationLocked(true)
                 setBarcodeImageEnabled(false)
+                // 用正方形取景框，库默认的是条形码用的横向矩形
+                setCaptureActivity(SquareCaptureActivity::class.java)
             }
         )
     }

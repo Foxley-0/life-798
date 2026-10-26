@@ -17,3 +17,8 @@
 # 内部还会通过反射构造 View 与解码器，整包保留最稳妥。
 -keep class com.journeyapps.** { *; }
 -dontwarn com.journeyapps.**
+
+# 自定义正方形取景框靠反射替换内部字段，字段名不能被混淆
+-keepclassmembers class com.journeyapps.barcodescanner.DecoratedBarcodeView {
+    private com.journeyapps.barcodescanner.ViewfinderView viewFinder;
+}
