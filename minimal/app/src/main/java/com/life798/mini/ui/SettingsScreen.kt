@@ -1,5 +1,6 @@
 package com.life798.mini.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,10 +19,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.life798.mini.ui.effect.BgEffectBackground
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -36,68 +35,83 @@ import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 设置页：账号 + 运行日志 + 退出登录。
+ * 设置页：账号 + 外观 / 日志 / 关于 + 退出登录。
  *
- * 背景用 miuix 官方的流动渐变（Android 13+ 生效，低版本自动降级为纯色）。
+ * 流动背景已经搬到「关于」页，这里保持干净的列表。
  */
 @Composable
 fun SettingsScreen(
     state: UiState,
+    onOpenAppearance: () -> Unit,
     onOpenLog: () -> Unit,
+    onOpenAbout: () -> Unit,
     onLogout: () -> Unit
 ) {
     var showLogoutConfirm by remember { mutableStateOf(false) }
 
-    BgEffectBackground(dynamicBackground = true) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            SmallTopAppBar(
-                title = "设置",
-                color = Color.Transparent
-            )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MiuixTheme.colorScheme.background)
+    ) {
+        SmallTopAppBar(title = "设置", color = androidx.compose.ui.graphics.Color.Transparent)
 
-            Column(modifier = Modifier.padding(16.dp)) {
-                // 账号
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.defaultColors(
-                        color = MiuixTheme.colorScheme.surface.copy(alpha = 0.78f)
+        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.defaultColors(
+                    color = MiuixTheme.colorScheme.surface.copy(alpha = 0.78f)
+                )
+            ) {
+                Column {
+                    Text(
+                        text = "账号",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceSecondary
                     )
-                ) {
-                    Column {
-                        Text(
-                            text = "账号",
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onSurfaceSecondary
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = state.phone.ifBlank { "未登录" },
-                            fontSize = 17.sp
-                        )
-                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = state.phone.ifBlank { "未登录" },
+                        fontSize = 17.sp
+                    )
                 }
+            }
 
-                Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(12.dp))
 
-                // 列表项
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.defaultColors(
-                        color = MiuixTheme.colorScheme.surface.copy(alpha = 0.78f)
-                    ),
-                    insideMargin = PaddingValues(0.dp)
-                ) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.defaultColors(
+                    color = MiuixTheme.colorScheme.surface.copy(alpha = 0.78f)
+                ),
+                insideMargin = PaddingValues(0.dp)
+            ) {
+                Column {
+                    ListRow(text = "外观", onClick = onOpenAppearance)
+                    HorizontalDivider()
                     ListRow(text = "运行日志", onClick = onOpenLog)
                     HorizontalDivider()
-                    ListRow(text = "退出登录", onClick = { showLogoutConfirm = true })
+                    ListRow(text = "关于", onClick = onOpenAbout)
                 }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.defaultColors(
+                    color = MiuixTheme.colorScheme.surface.copy(alpha = 0.78f)
+                ),
+                insideMargin = PaddingValues(0.dp)
+            ) {
+                ListRow(text = "退出登录", onClick = { showLogoutConfirm = true })
             }
         }
     }
 
     if (showLogoutConfirm) {
         OverlayDialog(
-            show = showLogoutConfirm,
+            show = true,
             title = "确定退出吗？",
             summary = "退出后需要重新登录，设备编号会被清除。",
             onDismissRequest = { showLogoutConfirm = false }

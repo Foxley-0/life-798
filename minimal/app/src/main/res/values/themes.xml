@@ -1,6 +1,12 @@
 <resources>
+    <!--
+      只负责冷启动那一帧：背景色交给 values-night 跟随系统深浅。
+      App 内的深浅与配色由 Compose 的 MiuixTheme 决定，这里不再写死状态栏颜色。
+    -->
     <style name="Theme.Life798Mini" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:statusBarColor">#FF1B6B4A</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

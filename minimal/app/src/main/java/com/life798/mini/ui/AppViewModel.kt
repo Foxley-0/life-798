@@ -29,6 +29,8 @@ data class UiState(
     val captchaError: String? = null,
     val busy: Boolean = false,
     val message: String? = null,
+    /** 配合 [message]：true 表示这是错误提示，界面上用错误色。 */
+    val messageIsError: Boolean = false,
     val smsCountdown: Int = 0,
     val configured: Boolean = true
 ) {
@@ -109,13 +111,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             when (val r = api.sendSms(phone.trim(), graphCode.trim(), _ui.value.captchaKey)) {
                 is ApiResult.Ok -> {
                     AppLog.i("Login", "短信已发送 → ${AppLog.maskPhone(phone)}")
-                    _ui.value = _ui.value.copy(busy = false, message = "验证码已发送")
+                    _ui.value = _ui.value.copy(
+                        busy = false,
+                        message = "验证码已发送",
+                        messageIsError = false
+                    )
                     startSmsCountdown()
                 }
 
                 is ApiResult.Err -> {
                     AppLog.w("Login", "发送短信失败: ${r.message}")
-                    _ui.value = _ui.value.copy(busy = false, message = r.message)
+                    _ui.value = _ui.value.copy(
+                        busy = false,
+                        message = r.message,
+                        messageIsError = true
+                    )
                     refreshCaptcha()
                 }
             }
@@ -153,7 +163,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
                 is ApiResult.Err -> {
                     AppLog.w("Login", "登录失败: ${r.message} (code=${r.code})")
-                    _ui.value = _ui.value.copy(busy = false, message = r.message)
+                    _ui.value = _ui.value.copy(
+                        busy = false,
+                        message = r.message,
+                        messageIsError = true
+                    )
                 }
             }
         }
@@ -205,7 +219,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun clearDevice() {
         AppLog.i("Device", "清除设备编号 did=${_ui.value.deviceId}")
-        _ui.value = _ui.value.copy(deviceId = "", message = null)
+        _ui.value = _ui.value.copy(deviceId = "", message = null, messageIsError = false)
     }
 
     fun startDevice() {
@@ -221,13 +235,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     // 设备启动后由用户在设备本体上结算，App 侧不需要计时或停止
                     _ui.value = _ui.value.copy(
                         busy = false,
-                        message = "已启动，请在设备上使用"
+                        message = "已启动，请在设备上使用",
+                        messageIsError = false
                     )
                 }
 
                 is ApiResult.Err -> {
                     AppLog.w("Device", "启动失败 did=${s.deviceId}: ${r.message} code=${r.code}")
-                    _ui.value = _ui.value.copy(busy = false, message = r.message)
+                    _ui.value = _ui.value.copy(
+                        busy = false,
+                        message = r.message,
+                        messageIsError = true
+                    )
                     if (r.code == -99) logout()
                 }
             }
@@ -252,7 +271,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun note(msg: String) {
-        _ui.value = _ui.value.copy(message = msg)
+        _ui.value = _ui.value.copy(message = msg, messageIsError = true)
     }
 
     private fun randomKey(): String {

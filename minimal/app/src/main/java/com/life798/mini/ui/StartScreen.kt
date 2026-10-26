@@ -1,6 +1,5 @@
 package com.life798.mini.ui
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,10 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -23,20 +18,22 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 启动页（二级页面）。
+ * 启动页（二级页）。
  *
  * 扫码成功后进入，显示设备编号与启动按钮。
- * 返回（按钮或系统返回键）都弹确认——确认后设备编号被清除，只能重新扫。
+ *
+ * 返回的确认弹窗由上层统一处理：这里只负责把「想返回」这件事报上去。
+ * 之前在这里挂 BackHandler + 本地弹窗，而 App 又没有 Scaffold 托管弹窗，
+ * 结果就是按返回毫无反应 —— 现在统一走根级返回栈。
  */
 @Composable
 fun StartScreen(
@@ -44,11 +41,6 @@ fun StartScreen(
     onBack: () -> Unit,
     onStart: () -> Unit
 ) {
-    var showBackConfirm by remember { mutableStateOf(false) }
-
-    // 系统返回键与页面返回按钮走同一套确认逻辑
-    BackHandler { showBackConfirm = true }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -60,7 +52,7 @@ fun StartScreen(
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { showBackConfirm = true }) {
+            IconButton(onClick = onBack) {
                 Icon(
                     imageVector = MiuixIcons.Back,
                     contentDescription = "返回",
@@ -90,6 +82,22 @@ fun StartScreen(
                 fontFamily = FontFamily.Monospace,
                 textAlign = TextAlign.Center
             )
+
+            // 启动结果必须可见：之前点了「启动」界面毫无变化，用户只能连点
+            state.message?.let { msg ->
+                Spacer(Modifier.height(18.dp))
+                Text(
+                    text = msg,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    textAlign = TextAlign.Center,
+                    color = if (state.messageIsError) {
+                        MiuixTheme.colorScheme.error
+                    } else {
+                        MiuixTheme.colorScheme.primary
+                    }
+                )
+            }
         }
 
         Column(
@@ -104,7 +112,11 @@ fun StartScreen(
                     .fillMaxWidth()
                     .height(56.dp)
             ) {
-                Text("启 动", fontSize = 17.sp)
+                if (state.busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                } else {
+                    Text("启 动", fontSize = 17.sp)
+                }
             }
 
             Spacer(Modifier.height(14.dp))
@@ -118,35 +130,6 @@ fun StartScreen(
             )
 
             Spacer(Modifier.height(36.dp))
-        }
-    }
-
-    if (showBackConfirm) {
-        OverlayDialog(
-            show = showBackConfirm,
-            title = "确定返回吗？",
-            summary = "返回后设备编号会被清除，需要重新扫描二维码。",
-            onDismissRequest = { showBackConfirm = false }
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                TextButton(
-                    text = "取消",
-                    onClick = { showBackConfirm = false },
-                    modifier = Modifier.weight(1f)
-                )
-                Button(
-                    onClick = {
-                        showBackConfirm = false
-                        onBack()
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("确定")
-                }
-            }
         }
     }
 }

@@ -182,10 +182,17 @@ class WaterApi(
             val code = json.optInt("code", Int.MIN_VALUE)
             if (code != 0) {
                 val raw = json.optString("msg")
-                val msg = when {
-                    code == -99 -> "登录已过期，请重新登录"
-                    raw.isNotBlank() -> raw
-                    else -> "请求失败（code=$code）"
+                // 业务码与上游客户端保持一致，直接给出可读原因，别把 code 甩给用户
+                val msg = when (code) {
+                    -99 -> "登录已过期，请重新登录"
+                    -21 -> "需要设备控制登录信息，请重新登录"
+                    -88 -> "未签约代扣协议，请先在服务端完成签约"
+                    -87 -> "签约已过期，请重新签约"
+                    -52 -> "账户欠费，请充值后使用"
+                    -20 -> "未绑定一卡通账号，请先完成账户绑定"
+                    -19 -> "设备准备中，请稍后"
+                    -82 -> "需要支付"
+                    else -> raw.ifBlank { "请求失败（code=$code）" }
                 }
                 AppLog.w("Api", "业务失败 code=$code msg=$raw")
                 return@use ApiResult.Err(msg, code)
