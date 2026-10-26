@@ -13,10 +13,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
@@ -40,28 +38,25 @@ import com.journeyapps.barcodescanner.DecoratedBarcodeView
 import com.life798.mini.core.AppLog
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 扫码页（全屏）。
  *
  * 进入时白底 + 「点击启动扫描」，相机不启动。
- * 点击后相机开始预览，白底淡出，露出全屏画面（不画取景框，整屏参与识别）。
- * 扫到后暂停预览，解析成功则弹确认框，确认后启动设备。
+ * 点击后相机预览，白底淡出，整屏参与识别（不画取景框）。
+ * 扫到并解析成功后，交给上层切到启动页。
  */
 @Composable
 fun ScanScreen(
     state: UiState,
     onDecoded: (String) -> Boolean,
-    onStart: () -> Unit
+    onScanned: () -> Unit
 ) {
     val context = LocalContext.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var showCover by remember { mutableStateOf(true) }
-    var showConfirm by remember { mutableStateOf(false) }
     var permissionGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
@@ -71,7 +66,6 @@ fun ScanScreen(
 
     val barcodeView = remember {
         DecoratedBarcodeView(context).apply {
-            // 不画取景框，整屏都是识别区域
             viewFinder.visibility = View.GONE
             setStatusText("")
         }
@@ -105,11 +99,10 @@ fun ScanScreen(
                 mainHandler.post {
                     barcodeView.pause()
                     AppLog.i("Scan", "识别到: ${text.take(100)}")
-                    val ok = onDecoded(text)
-                    if (ok) {
-                        showConfirm = true
+                    if (onDecoded(text)) {
+                        onScanned()
                     } else {
-                        // 解析失败（非本平台/无法识别），退回白底让用户重扫
+                        // 非本平台或无法识别，退回白底让用户重扫
                         showCover = true
                     }
                 }
@@ -158,41 +151,6 @@ fun ScanScreen(
                     ) {
                         Text("点击启动扫描", fontSize = 16.sp)
                     }
-                }
-            }
-        }
-    }
-
-    if (showConfirm) {
-        OverlayDialog(
-            show = showConfirm,
-            title = "启动设备",
-            summary = "设备编号：${state.deviceId}\n\n启动后请在设备上使用，用完在设备上结算。",
-            onDismissRequest = {
-                showConfirm = false
-                showCover = true
-            }
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                TextButton(
-                    text = "取消",
-                    onClick = {
-                        showConfirm = false
-                        showCover = true
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-                Button(
-                    onClick = {
-                        showConfirm = false
-                        onStart()
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("确认启动")
                 }
             }
         }

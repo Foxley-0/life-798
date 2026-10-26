@@ -49,12 +49,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val token = prefs.token.first()
             val phone = prefs.phone.first()
-            val device = prefs.deviceId.first()
+            // 设备编号不落盘：每次启动 App 都必须重新扫码
             _ui.value = _ui.value.copy(
                 ready = true,
                 token = token,
-                phone = phone,
-                deviceId = device
+                phone = phone
             )
             // 未登录才需要图形验证码；已登录直接进首页，不必白跑一次请求。
             if (token.isBlank()) {
@@ -180,13 +179,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return when (val r = QrParser.parse(raw)) {
             is QrResult.Ok -> {
                 AppLog.i("Scan", "设备编号=${r.deviceId} host=${r.host.ifBlank { "(纯编号)" }}")
-                viewModelScope.launch {
-                    prefs.saveDevice(r.deviceId)
-                    _ui.value = _ui.value.copy(
-                        deviceId = r.deviceId,
-                        message = "已识别设备 ${r.deviceId}"
-                    )
-                }
+                // 设备编号只活在本次会话，不写盘
+                _ui.value = _ui.value.copy(deviceId = r.deviceId, message = null)
                 true
             }
 
@@ -202,6 +196,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 false
             }
         }
+    }
+
+    /**
+     * 清除设备编号。
+     *
+     * 按业务要求：离开启动页后编号即作废，必须重新扫码，避免误用上一台设备。
+     */
+    fun clearDevice() {
+        AppLog.i("Device", "清除设备编号 did=${_ui.value.deviceId}")
+        _ui.value = _ui.value.copy(deviceId = "", message = null)
     }
 
     fun startDevice() {

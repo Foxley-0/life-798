@@ -98,6 +98,9 @@ dependencies {
     // MIUI / HyperOS 风格组件库（取代 Material3）
     implementation("top.yukonga.miuix.kmp:miuix-ui-android:0.9.4")
     implementation("top.yukonga.miuix.kmp:miuix-squircle-android:0.9.4")
+    implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.4")
+    // 背景流动效果依赖 RuntimeShader
+    implementation("top.yukonga.miuix.kmp:miuix-blur-android:0.9.4")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")

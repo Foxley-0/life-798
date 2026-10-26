@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      miuix-blur 声明 minSdk 33（AGSL 着色器要求），但代码里已用
+      isRuntimeShaderSupported() 做运行时判断，低版本会跳过背景绘制。
+      这里放开检查，保证 Android 8~12 仍可安装使用（只是没有流动背景）。
+    -->
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
