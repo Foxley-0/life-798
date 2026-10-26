@@ -99,6 +99,8 @@ dependencies {
     implementation("top.yukonga.miuix.kmp:miuix-ui-android:0.9.4")
     implementation("top.yukonga.miuix.kmp:miuix-squircle-android:0.9.4")
     implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.4")
+    // 设置项组件（ArrowPreference / OverlayDropdownPreference / SwitchPreference）
+    implementation("top.yukonga.miuix.kmp:miuix-preference-android:0.9.4")
     // 背景流动效果依赖 RuntimeShader
     implementation("top.yukonga.miuix.kmp:miuix-blur-android:0.9.4")
     implementation("androidx.compose.ui:ui")

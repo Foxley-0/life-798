@@ -1,36 +1,39 @@
 package com.life798.mini.ui
 
 import android.os.Build
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
+private val THEME_OPTIONS = listOf("跟随系统", "浅色", "深色")
+private val ACCENT_OPTIONS = listOf("MIUI 蓝", "跟随壁纸")
+
 /**
- * 外观设置：深浅模式 + 配色方案。
+ * 外观设置。
  *
- * 点击即时生效并落盘，没有「确定」按钮 —— MIUI 的设置项就是这个手感。
+ * 结构照 SonyPods 的 ThemeSettingsPage：两个 OverlayDropdownPreference，
+ * 点开是 miuix 原生下拉弹窗，选中即生效并落盘，没有「确定」按钮。
  */
 @Composable
 fun AppearanceScreen(
@@ -43,7 +46,7 @@ fun AppearanceScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background)
+            .statusBarsPadding()
     ) {
         SmallTopAppBar(
             title = "外观",
@@ -59,122 +62,42 @@ fun AppearanceScreen(
             }
         )
 
-        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            SectionLabel("深浅模式")
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                insideMargin = PaddingValues(0.dp)
-            ) {
-                Column {
-                    ChoiceRow(
-                        title = "跟随系统",
-                        summary = "跟随手机的深色模式设置",
-                        selected = themeMode == THEME_SYSTEM,
-                        onClick = { onThemeMode(THEME_SYSTEM) }
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .navigationBarsPadding(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp)
+        ) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    OverlayDropdownPreference(
+                        title = "深浅模式",
+                        summary = "决定界面跟随系统还是固定深浅",
+                        items = THEME_OPTIONS,
+                        selectedIndex = themeMode.coerceIn(THEME_OPTIONS.indices),
+                        onSelectedIndexChange = onThemeMode
                     )
-                    HorizontalDivider()
-                    ChoiceRow(
-                        title = "浅色",
-                        selected = themeMode == THEME_LIGHT,
-                        onClick = { onThemeMode(THEME_LIGHT) }
-                    )
-                    HorizontalDivider()
-                    ChoiceRow(
-                        title = "深色",
-                        selected = themeMode == THEME_DARK,
-                        onClick = { onThemeMode(THEME_DARK) }
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(18.dp))
-
-            SectionLabel("配色")
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                insideMargin = PaddingValues(0.dp)
-            ) {
-                Column {
-                    ChoiceRow(
-                        title = "MIUI 蓝",
-                        summary = "miuix 默认主色，稳定统一",
-                        selected = accentMode == ACCENT_MIUI,
-                        onClick = { onAccentMode(ACCENT_MIUI) }
-                    )
-                    HorizontalDivider()
-                    ChoiceRow(
-                        title = "跟随壁纸",
+                    OverlayDropdownPreference(
+                        title = "配色方案",
                         summary = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            "从系统壁纸提取主色"
+                            "跟随壁纸会从系统主题色提取主色"
                         } else {
-                            "需要 Android 12 及以上，当前系统会自动回落到 MIUI 蓝"
+                            "跟随壁纸需要 Android 12 及以上，当前系统会回落到 MIUI 蓝"
                         },
-                        selected = accentMode == ACCENT_MONET,
-                        onClick = { onAccentMode(ACCENT_MONET) }
+                        items = ACCENT_OPTIONS,
+                        selectedIndex = accentMode.coerceIn(ACCENT_OPTIONS.indices),
+                        onSelectedIndexChange = onAccentMode
                     )
                 }
-            }
 
-            Spacer(Modifier.height(12.dp))
-            Text(
-                text = "配色变化会立即应用到按钮、开关与高亮项。",
-                fontSize = 12.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                modifier = Modifier.padding(horizontal = 4.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        fontSize = 13.sp,
-        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        modifier = Modifier.padding(start = 6.dp, top = 8.dp, bottom = 8.dp)
-    )
-}
-
-@Composable
-private fun ChoiceRow(
-    title: String,
-    summary: String? = null,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 16.sp,
-                color = if (selected) {
-                    MiuixTheme.colorScheme.primary
-                } else {
-                    MiuixTheme.colorScheme.onSurface
-                }
-            )
-            if (summary != null) {
-                Spacer(Modifier.height(3.dp))
+                Spacer(Modifier.height(12.dp))
                 Text(
-                    text = summary,
+                    text = "配色变化会立即应用到按钮、开关与高亮项。",
                     fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(horizontal = 4.dp)
                 )
             }
-        }
-        if (selected) {
-            Text(
-                text = "✓",
-                fontSize = 17.sp,
-                color = MiuixTheme.colorScheme.primary
-            )
         }
     }
 }

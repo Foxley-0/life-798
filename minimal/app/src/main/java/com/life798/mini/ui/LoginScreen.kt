@@ -12,9 +12,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -63,8 +68,12 @@ fun LoginScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MiuixTheme.colorScheme.background)
-            .padding(horizontal = 24.dp),
-        verticalArrangement = Arrangement.Center
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            // 键盘弹出时整页可滚，否则短信验证码那一栏会把登录按钮顶出屏幕
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 32.dp)
     ) {
         Text(
             text = "798 小助手",

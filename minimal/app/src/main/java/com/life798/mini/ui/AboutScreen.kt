@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,11 +12,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,28 +45,26 @@ import com.life798.mini.BuildConfig
 import com.life798.mini.R
 import com.life798.mini.ui.effect.BgEffectBackground
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
-import top.yukonga.miuix.kmp.icon.extended.ChevronForward
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-private val HERO_HEIGHT = 268.dp
+private val HERO_HEIGHT = 240.dp
+private val TOP_BAR_HEIGHT = 56.dp
 private const val REPO_URL = "https://github.com/Foxley-0/life-798"
 
 /**
  * 关于页（二级页）。
  *
- * 结构参考 miuix 官方 AboutPage：
+ * 结构参考 miuix 官方 AboutPage / SonyPods：
  * - HyperOS 流动背景（原来挂在设置页，现在归这里）
  * - 固定 hero：图标 / 名称 / 版本，随滚动依次淡出
  * - 下方卡片：运行日志、项目仓库、开源许可
- *
- * 动效只在这一页跑，离开页面即停。
  */
 @Composable
 fun AboutScreen(
@@ -86,7 +87,14 @@ fun AboutScreen(
 
     var showLicenses by remember { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    // 动效要铺到状态栏下才叫沉浸，所以 inset 只作用在内容上，不作用在背景上
+    val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .navigationBarsPadding()
+    ) {
         BgEffectBackground(
             dynamicBackground = true,
             isFullSize = true,
@@ -97,28 +105,35 @@ fun AboutScreen(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
-                    top = HERO_HEIGHT + 56.dp,
+                    top = statusBarTop + HERO_HEIGHT + TOP_BAR_HEIGHT,
                     start = 16.dp,
                     end = 16.dp,
                     bottom = 28.dp
                 )
             ) {
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        insideMargin = PaddingValues(0.dp)
-                    ) {
-                        Column {
-                            ArrowRow("运行日志", onClick = onOpenLog)
-                            HorizontalDivider()
-                            ArrowRow(
-                                title = "项目仓库",
-                                endText = "GitHub",
-                                onClick = { openLink(context, REPO_URL) }
-                            )
-                            HorizontalDivider()
-                            ArrowRow(title = "开源许可", onClick = { showLicenses = true })
-                        }
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        ArrowPreference(
+                            title = "运行日志",
+                            summary = "查看与导出本次运行记录",
+                            onClick = onOpenLog
+                        )
+                        ArrowPreference(
+                            title = "项目仓库",
+                            endActions = {
+                                Text(
+                                    text = "GitHub",
+                                    fontSize = 13.sp,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantActions
+                                )
+                            },
+                            onClick = { openLink(context, REPO_URL) }
+                        )
+                        ArrowPreference(
+                            title = "开源许可",
+                            summary = "miuix / ZXing / OkHttp",
+                            onClick = { showLicenses = true }
+                        )
                     }
 
                     Spacer(Modifier.height(20.dp))
@@ -134,12 +149,12 @@ fun AboutScreen(
             }
         }
 
-        // 固定 hero：版本先淡、名称次之、图标最后，和 miuix 示例的节奏一致
+        // 固定 hero：版本先淡、名称次之、图标最后
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(top = 64.dp),
+                .padding(top = statusBarTop + TOP_BAR_HEIGHT),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Image(
@@ -187,7 +202,8 @@ fun AboutScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .height(56.dp)
+                .padding(top = statusBarTop)
+                .height(TOP_BAR_HEIGHT)
                 .padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -245,42 +261,6 @@ private fun LicenseLine(name: String, desc: String) {
             text = desc,
             fontSize = 11.sp,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-        )
-    }
-}
-
-@Composable
-private fun ArrowRow(
-    title: String,
-    endText: String? = null,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 15.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = title,
-            fontSize = 16.sp,
-            color = MiuixTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f)
-        )
-        if (endText != null) {
-            Text(
-                text = endText,
-                fontSize = 13.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-            )
-        }
-        Spacer(Modifier.size(6.dp))
-        Icon(
-            imageVector = MiuixIcons.ChevronForward,
-            contentDescription = null,
-            tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-            modifier = Modifier.size(17.dp)
         )
     }
 }

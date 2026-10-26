@@ -1,15 +1,15 @@
 package com.life798.mini.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,6 +21,7 @@ import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
@@ -31,9 +32,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  *
  * 扫码成功后进入，显示设备编号与启动按钮。
  *
- * 返回的确认弹窗由上层统一处理：这里只负责把「想返回」这件事报上去。
+ * 返回确认由上层统一处理：这里只把「想返回」报上去。
  * 之前在这里挂 BackHandler + 本地弹窗，而 App 又没有 Scaffold 托管弹窗，
- * 结果就是按返回毫无反应 —— 现在统一走根级返回栈。
+ * 结果就是按返回毫无反应。
  */
 @Composable
 fun StartScreen(
@@ -44,23 +45,22 @@ fun StartScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background)
+            .statusBarsPadding()
+            .navigationBarsPadding()
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = MiuixIcons.Back,
-                    contentDescription = "返回",
-                    tint = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(22.dp)
-                )
+        SmallTopAppBar(
+            title = "启动设备",
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = MiuixIcons.Back,
+                        contentDescription = "返回",
+                        tint = MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
-        }
+        )
 
         Column(
             modifier = Modifier
@@ -129,7 +129,7 @@ fun StartScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Spacer(Modifier.height(36.dp))
+            Spacer(Modifier.height(28.dp))
         }
     }
 }
