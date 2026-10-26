@@ -3,12 +3,10 @@ package com.life798.mini
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -25,6 +23,8 @@ import com.life798.mini.ui.LogScreen
 import com.life798.mini.ui.LoginScreen
 import com.life798.mini.ui.MiniTheme
 import com.life798.mini.ui.ScanScreen
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 private enum class Screen { HOME, SCAN, LOG }
 
@@ -44,11 +44,11 @@ class MainActivity : ComponentActivity() {
                     if (state.loggedIn) screen = Screen.HOME.name
                 }
 
-                Surface(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .safeDrawingPadding(),
-                    color = MaterialTheme.colorScheme.background
+                        .safeDrawingPadding()
+                        .background(MiuixTheme.colorScheme.background)
                 ) {
                     when {
                         !state.ready -> Loading()

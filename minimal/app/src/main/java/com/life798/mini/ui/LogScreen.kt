@@ -12,16 +12,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -29,6 +24,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.life798.mini.core.AppLog
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -49,24 +49,18 @@ fun LogScreen(onBack: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(MiuixTheme.colorScheme.background)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "运行日志",
-                fontSize = 18.sp,
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(onClick = onBack) { Text("返回") }
-        }
+        SmallTopAppBar(
+            title = "运行日志",
+            navigationIcon = {
+                TextButton(text = "返回", onClick = onBack)
+            }
+        )
 
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
             TextButton(
+                text = "导出文件",
                 onClick = {
                     val path = exportLogFile(context)
                     if (path == null) {
@@ -76,36 +70,36 @@ fun LogScreen(onBack: () -> Unit) {
                         shareFile(context, path)
                     }
                 }
-            ) { Text("导出文件", fontSize = 12.sp) }
-
+            )
             TextButton(
+                text = "复制",
                 onClick = {
                     copyToClipboard(context, content)
                     tip = "已复制到剪贴板"
                 }
-            ) { Text("复制", fontSize = 12.sp) }
-
+            )
             TextButton(
+                text = "刷新",
                 onClick = {
                     content = AppLog.dump()
                     tip = "已刷新，共 ${AppLog.size()} 条"
                 }
-            ) { Text("刷新", fontSize = 12.sp) }
-
+            )
             TextButton(
+                text = "清空",
                 onClick = {
                     AppLog.clear()
                     content = AppLog.dump()
                     tip = "已清空"
                 }
-            ) { Text("清空", fontSize = 12.sp) }
+            )
         }
 
         tip?.let {
             Text(
                 text = it,
                 fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.primary,
+                color = MiuixTheme.colorScheme.primary,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
             )
         }

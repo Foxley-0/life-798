@@ -9,10 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,14 +24,16 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.life798.mini.core.AppLog
 import com.life798.mini.scan.SquareCaptureActivity
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 扫码页。
  *
- * 不再自己处理相机帧，改用 zxing-android-embedded 的 CaptureActivity：
- * 对焦、曝光、旋转、二值化全部由成熟库负责，识别率和稳定性远高于手写实现。
- *
- * 本页只做三件事：启动扫码、展示上一次的结果、允许重扫。
+ * 相机与解码交给 zxing-android-embedded 的 CaptureActivity，
+ * 本页只负责拉起扫码、展示结果、允许重扫。
  */
 @Composable
 fun ScanScreen(
@@ -74,18 +72,18 @@ fun ScanScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(MiuixTheme.colorScheme.background)
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(text = "扫码已结束", fontSize = 16.sp)
+        Text(text = "扫码已结束", fontSize = 17.sp)
 
         state.message?.let { msg ->
             Spacer(Modifier.height(12.dp))
             Text(
                 text = msg,
-                color = MaterialTheme.colorScheme.error,
+                color = MiuixTheme.colorScheme.error,
                 fontSize = 13.sp,
                 textAlign = TextAlign.Center
             )
@@ -97,20 +95,17 @@ fun ScanScreen(
             onClick = { scanRound++ },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp)
+                .height(52.dp)
         ) {
-            Text("重新扫描")
+            Text("重新扫描", fontSize = 16.sp)
         }
 
         Spacer(Modifier.height(10.dp))
 
-        OutlinedButton(
+        TextButton(
+            text = "返回",
             onClick = onBack,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-        ) {
-            Text("返回")
-        }
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }

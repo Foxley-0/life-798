@@ -15,15 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,12 +29,18 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 登录页：手机号 + 图形验证码 + 短信验证码，一屏完成。
  *
- * 验证码区域分三态：加载中 / 已加载 / 失败（附具体原因），
- * 避免出现「空白且没有任何提示」的情况。
+ * 验证码区域分三态：加载中 / 已加载 / 失败（附原因）。
  */
 @Composable
 fun LoginScreen(
@@ -64,44 +62,39 @@ fun LoginScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(MiuixTheme.colorScheme.background)
             .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.Center
     ) {
         Text(
             text = "798 小助手",
-            fontSize = 26.sp,
-            color = MaterialTheme.colorScheme.primary
+            fontSize = 28.sp,
+            color = MiuixTheme.colorScheme.primary
         )
         Spacer(Modifier.height(6.dp))
         Text(
             text = "登录后即可扫码启动用水设备",
             fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MiuixTheme.colorScheme.onSurfaceSecondary
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(24.dp))
 
         // 网关没配就直接挡在门口，别让人白试
         if (!state.configured) {
-            Surface(
-                color = MaterialTheme.colorScheme.errorContainer,
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "未配置 API 网关，无法登录。请检查 secrets.properties 或仓库 Secrets。",
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(12.dp)
+                    color = MiuixTheme.colorScheme.error
                 )
             }
             Spacer(Modifier.height(16.dp))
         }
 
-        OutlinedTextField(
+        TextField(
             value = phone,
             onValueChange = { if (it.length <= 11) phone = it.filter(Char::isDigit) },
-            label = { Text("手机号") },
+            label = "手机号",
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
             modifier = Modifier.fillMaxWidth()
@@ -110,10 +103,10 @@ fun LoginScreen(
         Spacer(Modifier.height(12.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
+            TextField(
                 value = graphCode,
                 onValueChange = { if (it.length <= 6) graphCode = it },
-                label = { Text("图形验证码") },
+                label = "图形验证码",
                 singleLine = true,
                 modifier = Modifier.weight(1f)
             )
@@ -126,8 +119,7 @@ fun LoginScreen(
             ) {
                 when {
                     state.captchaLoading -> CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp
+                        modifier = Modifier.size(20.dp)
                     )
 
                     captchaBitmap != null -> Image(
@@ -140,7 +132,7 @@ fun LoginScreen(
                         text = if (state.captchaError != null) "加载失败\n点此重试" else "点此加载",
                         fontSize = 11.sp,
                         lineHeight = 14.sp,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MiuixTheme.colorScheme.primary,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -155,54 +147,48 @@ fun LoginScreen(
             Text(
                 text = state.captchaError.orEmpty(),
                 fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.error,
+                color = MiuixTheme.colorScheme.error,
                 modifier = Modifier.weight(1f)
             )
-            TextButton(onClick = onRefreshCaptcha, enabled = !state.captchaLoading) {
-                Text("换一张", fontSize = 12.sp)
-            }
+            TextButton(
+                text = "换一张",
+                onClick = onRefreshCaptcha,
+                enabled = !state.captchaLoading
+            )
         }
 
         Spacer(Modifier.height(4.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
+            TextField(
                 value = smsCode,
                 onValueChange = { if (it.length <= 8) smsCode = it.filter(Char::isDigit) },
-                label = { Text("短信验证码") },
+                label = "短信验证码",
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.width(12.dp))
             TextButton(
+                text = if (state.smsCountdown > 0) "${state.smsCountdown}s" else "获取验证码",
                 onClick = { onSendSms(phone, graphCode) },
                 enabled = state.smsCountdown == 0 && !state.busy && state.configured
-            ) {
-                Text(
-                    text = if (state.smsCountdown > 0) "${state.smsCountdown}s" else "获取验证码",
-                    fontSize = 13.sp
-                )
-            }
+            )
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(24.dp))
 
         Button(
             onClick = { onLogin(phone, smsCode) },
             enabled = !state.busy && state.configured,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp)
+                .height(52.dp)
         ) {
             if (state.busy) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
+                CircularProgressIndicator(modifier = Modifier.size(18.dp))
             } else {
-                Text("登 录")
+                Text("登 录", fontSize = 17.sp)
             }
         }
 
@@ -211,7 +197,7 @@ fun LoginScreen(
             Text(
                 text = state.message,
                 fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.error,
+                color = MiuixTheme.colorScheme.error,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
