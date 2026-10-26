@@ -33,6 +33,16 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # 缓存 ~/.gradle 与 wrapper 分发包。
+      # 没有这步时，每次 run 都要重新下载 140MB 的 gradle-9.5.0-bin.zip
+      # 和全部 Maven 依赖，日志停在 "Downloading https://services.gradle.org/..."
+      # 很久，看起来像卡住，其实是纯下载。
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: minimal
+          cache-read-only: false
+
       - name: Prepare Android SDK
         run: |
           # GitHub 的 ubuntu runner 自带 Android SDK，直接用 ANDROID_HOME，
