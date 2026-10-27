@@ -275,11 +275,9 @@ private fun MiniApp(
         }
     }
 
-    // Scaffold 与弹窗必须有共同父容器，否则它们是兄弟节点，
-    // 弹窗会渲染到未定义位置（表现为「点了没反应」）
-    Box(modifier = Modifier.fillMaxSize()) {
-        // 外层 Scaffold 只做一件事：挂载 MiuixPopupHost，让 OverlayDialog 有地方渲染。
-        Scaffold(
+    // OverlayDialog 必须在 Scaffold 的 content 内部：LocalPopupStates 由 Scaffold
+    // 提供且只包住 content lambda，放在外面读不到，popup 会被直接丢弃。
+    Scaffold(
         containerColor = MiuixTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { _ ->
@@ -302,36 +300,35 @@ private fun MiniApp(
                 onBottomBarStyle = onBottomBarStyle
             )
         }
-    }
 
-    if (confirmExitStart) {
-        OverlayDialog(
-            show = true,
-            title = "确定返回吗？",
-            summary = "返回后设备编号会被清除，需要重新扫描二维码。",
-            onDismissRequest = { confirmExitStart = false }
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+        if (confirmExitStart) {
+            OverlayDialog(
+                show = true,
+                title = "确定返回吗？",
+                summary = "返回后设备编号会被清除，需要重新扫描二维码。",
+                onDismissRequest = { confirmExitStart = false }
             ) {
-                TextButton(
-                    text = "取消",
-                    onClick = { confirmExitStart = false },
-                    modifier = Modifier.weight(1f)
-                )
-                Button(
-                    onClick = {
-                        confirmExitStart = false
-                        pop()
-                    },
-                    modifier = Modifier.weight(1f)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("确定")
+                    TextButton(
+                        text = "取消",
+                        onClick = { confirmExitStart = false },
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(
+                        onClick = {
+                            confirmExitStart = false
+                            pop()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("确定")
+                    }
                 }
             }
         }
-    }
     }
 }
 
