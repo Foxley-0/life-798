@@ -171,6 +171,13 @@ private fun MiniApp(
         mutableStateOf(emptyList<String>())
     }
     var lastBackAt by remember { mutableLongStateOf(0L) }
+    // 返回节流：动画期间连按两次会一次退两层
+    var lastNavAt by remember { mutableLongStateOf(0L) }
+    // 动画方向：push 往右进，pop 往左出（不能靠"目标是不是 TABS"判断）
+    var navForward by remember { mutableStateOf(true) }
+    // 扫码页：返回时先停相机；已开始扫描的状态要跨页面重建保留
+    var scanPauseTick by remember { mutableIntStateOf(0) }
+    var scanStarted by rememberSaveable { mutableStateOf(false) }
     var confirmExitStart by remember { mutableStateOf(false) }
 
     // 登录态失效（主动登出 / token 过期）时把导航整体归零。
@@ -206,6 +213,7 @@ private fun MiniApp(
             return
         }
         AppLog.i("Nav", "push ${route.name}")
+        navForward = true
         stack = stack + route.name
     }
 
@@ -214,6 +222,7 @@ private fun MiniApp(
         if (stack.isEmpty()) return false
         val top = stack.last()
         AppLog.i("Nav", "pop $top")
+        navForward = false
         stack = stack.dropLast(1)
         // 离开启动页即作废设备编号，必须重新扫码
         if (top == Route.START.name) vm.clearDevice()
@@ -222,6 +231,12 @@ private fun MiniApp(
 
     /** 返回按钮与系统返回键走同一条路：启动页先弹确认，其余直接出栈。 */
     fun requestBack() {
+        val now = System.currentTimeMillis()
+        if (now - lastNavAt < 220L) {
+            AppLog.i("Nav", "返回过快，忽略")
+            return
+        }
+        lastNavAt = now
         AppLog.i("Nav", "back stack=$stack tab=$tab")
         if (stack.lastOrNull() == Route.START.name) {
             confirmExitStart = true
@@ -230,12 +245,21 @@ private fun MiniApp(
         }
     }
 
-    // 全局唯一的返回入口：先出栈 → 再回扫码 tab → 最后才是退出应用
+    // 全局唯一的返回入口
     BackHandler {
+        val inMain = state.ready && state.loggedIn
         when {
+            // 登录页 / 加载页是 App 入口，按返回就是想退出，不该弹"再按一次"
+            !inMain -> (context as? Activity)?.finish()
+
             stack.isNotEmpty() -> requestBack()
+
             tab != Tab.SCAN.name -> tab = Tab.SCAN.name
+
             else -> {
+                // 扫码页：先把相机停掉再提示，否则用户以为返回没反应，
+                // 而且这 2 秒里扫到码会直接跳走
+                scanPauseTick++
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt < 2000L) {
                     (context as? Activity)?.finish()
@@ -261,6 +285,10 @@ private fun MiniApp(
                 stack = stack,
                 onPush = ::push,
                 onBack = { requestBack() },
+                navForward = navForward,
+                scanPauseTick = scanPauseTick,
+                scanStarted = scanStarted,
+                onScanStarted = { scanStarted = true },
                 themeMode = themeMode,
                 accentMode = accentMode,
                 bottomBarStyle = bottomBarStyle,
@@ -310,6 +338,10 @@ private fun MainScaffold(
     stack: List<String>,
     onPush: (Route) -> Unit,
     onBack: () -> Unit,
+    navForward: Boolean,
+    scanPauseTick: Int,
+    scanStarted: Boolean,
+    onScanStarted: () -> Unit,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -338,7 +370,14 @@ private fun MainScaffold(
             }
         }
     ) { padding ->
-        val bottomInset = padding.calculateBottomPadding()
+        // 胶囊底栏自带 26dp 悬浮空隙，列表底部留白要扣掉，
+        // 否则最后一项会离胶囊很远
+        val rawBottom = padding.calculateBottomPadding()
+        val bottomInset = if (bottomBarStyle == UiPrefs.BOTTOM_BAR_PILL) {
+            (rawBottom - 26.dp).coerceAtLeast(0.dp)
+        } else {
+            rawBottom
+        }
 
         // 内容层标记为「会被底栏采样」——滚动时内容在栏下虚化
         BarBackdropContent(modifier = Modifier.fillMaxSize()) {
@@ -371,6 +410,10 @@ private fun MainScaffold(
                         bottomInset = bottomInset,
                         onPush = onPush,
                         onBack = onBack,
+                        navForward = navForward,
+                        scanPauseTick = scanPauseTick,
+                        scanStarted = scanStarted,
+                        onScanStarted = onScanStarted,
                         themeMode = themeMode,
                         accentMode = accentMode,
                         bottomBarStyle = bottomBarStyle,
@@ -450,6 +493,10 @@ private fun MainContent(
     bottomInset: Dp,
     onPush: (Route) -> Unit,
     onBack: () -> Unit,
+    navForward: Boolean,
+    scanPauseTick: Int,
+    scanStarted: Boolean,
+    onScanStarted: () -> Unit,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -460,8 +507,9 @@ private fun MainContent(
     AnimatedContent(
         targetState = current ?: Route.TABS.name,
         transitionSpec = {
-            val entering = targetState != Route.TABS.name
-            if (entering) {
+            // 方向由 push/pop 决定，不再靠"目标是不是 TABS"猜 ——
+            // 否则二级页之间返回也会被当成"进入"，动画方向是反的
+            if (navForward) {
                 (slideInHorizontally(tween(280)) { it } + fadeIn(tween(180))) togetherWith
                     (slideOutHorizontally(tween(280)) { -it / 5 } + fadeOut(tween(180)))
             } else {
@@ -507,7 +555,10 @@ private fun MainContent(
                         state = state,
                         onEnter = vm::clearMessage,
                         onDecoded = vm::onQrDecoded,
-                        onScanned = { onPush(Route.START) }
+                        onScanned = { onPush(Route.START) },
+                        started = scanStarted,
+                        onStarted = onScanStarted,
+                        pauseTick = scanPauseTick
                     )
 
                     else -> SettingsScreen(

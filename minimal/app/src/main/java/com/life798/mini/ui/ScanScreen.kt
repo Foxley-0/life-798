@@ -62,13 +62,18 @@ fun ScanScreen(
     state: UiState,
     onEnter: () -> Unit,
     onDecoded: (String) -> Boolean,
-    onScanned: () -> Unit
+    onScanned: () -> Unit,
+    /** 本次会话是否已经启动过扫描（跨页面重建保留，返回后不用再点一次） */
+    started: Boolean = false,
+    onStarted: () -> Unit = {},
+    /** 每次自增表示"上层要求暂停相机"（按返回键时） */
+    pauseTick: Int = 0
 ) {
     val context = LocalContext.current
     val view = LocalView.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
-    var showCover by remember { mutableStateOf(true) }
+    var showCover by remember { mutableStateOf(!started) }
     var barcodeView by remember { mutableStateOf<DecoratedBarcodeView?>(null) }
     var permissionDenied by remember { mutableStateOf(false) }
     var alive by remember { mutableStateOf(true) }
@@ -81,6 +86,22 @@ fun ScanScreen(
 
     // 进页清掉上一次的提示，否则旧的错误文案会一直挂在新一轮扫码上
     LaunchedEffect(Unit) { onEnter() }
+
+    // 已经扫过的话，返回后直接恢复预览，不用再点一次「点击启动扫描」
+    LaunchedEffect(barcodeView, started) {
+        if (started && barcodeView != null && permissionGranted) {
+            barcodeView?.resume()
+            showCover = false
+        }
+    }
+
+    // 上层按返回键时先把相机停掉，否则界面毫无变化、且这 2 秒里扫到码会跳走
+    LaunchedEffect(pauseTick) {
+        if (pauseTick > 0) {
+            barcodeView?.pause()
+            AppLog.i("Scan", "按返回键，相机已暂停")
+        }
+    }
 
     // 页面销毁后丢弃异步到达的扫码结果
     DisposableEffect(Unit) {
@@ -111,6 +132,7 @@ fun ScanScreen(
         if (granted) {
             barcodeView?.resume()
             showCover = false
+            onStarted()
         }
     }
 
@@ -122,6 +144,7 @@ fun ScanScreen(
         AppLog.i("Scan", "开始扫描")
         barcodeView?.resume()
         showCover = false
+        onStarted()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
