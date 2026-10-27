@@ -44,16 +44,19 @@ import com.journeyapps.barcodescanner.BarcodeCallback
 import com.journeyapps.barcodescanner.BarcodeResult
 import com.journeyapps.barcodescanner.DecoratedBarcodeView
 import com.life798.mini.core.AppLog
-import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 扫码页（全屏白底）。
+ * 扫码页：**进页即扫，全屏识别**。
  *
- * 三个容易踩的点都在这里处理：
- * 1. 白底铺到状态栏下，所以状态栏图标必须强制深色，否则深色主题下白图标看不见
+ * - 没有「点击启动扫描」这一步，相机拿到权限就直接开
+ * - 预览铺满整屏（含状态栏区域），不画取景框，整帧参与解码
+ * - 白底只在「相机启动中 / 权限被拒」时出现，之后淡出
+ *
+ * 三个容易踩的点：
+ * 1. 白底铺到状态栏下，状态栏图标必须强制深色，否则深色主题下白图标看不见
  * 2. 相机由 AndroidView 的 factory 创建、onRelease 释放，不用 remember 长期持有
  * 3. 解码回调是异步的，页面销毁后要丢弃结果，否则会把用户从扫码页拽进启动页
  */
@@ -63,17 +66,14 @@ fun ScanScreen(
     onEnter: () -> Unit,
     onDecoded: (String) -> Boolean,
     onScanned: () -> Unit,
-    /** 本次会话是否已经启动过扫描（跨页面重建保留，返回后不用再点一次） */
-    started: Boolean = false,
-    onStarted: () -> Unit = {},
-    /** 每次自增表示"上层要求暂停相机"（按返回键时） */
+    /** 每次自增表示「上层要求暂停相机」（按返回键时） */
     pauseTick: Int = 0
 ) {
     val context = LocalContext.current
     val view = LocalView.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
-    var showCover by remember { mutableStateOf(!started) }
+    var showCover by remember { mutableStateOf(true) }
     var barcodeView by remember { mutableStateOf<DecoratedBarcodeView?>(null) }
     var permissionDenied by remember { mutableStateOf(false) }
     var alive by remember { mutableStateOf(true) }
@@ -84,24 +84,7 @@ fun ScanScreen(
         )
     }
 
-    // 进页清掉上一次的提示，否则旧的错误文案会一直挂在新一轮扫码上
     LaunchedEffect(Unit) { onEnter() }
-
-    // 已经扫过的话，返回后直接恢复预览，不用再点一次「点击启动扫描」
-    LaunchedEffect(barcodeView, started) {
-        if (started && barcodeView != null && permissionGranted) {
-            barcodeView?.resume()
-            showCover = false
-        }
-    }
-
-    // 上层按返回键时先把相机停掉，否则界面毫无变化、且这 2 秒里扫到码会跳走
-    LaunchedEffect(pauseTick) {
-        if (pauseTick > 0) {
-            barcodeView?.pause()
-            AppLog.i("Scan", "按返回键，相机已暂停")
-        }
-    }
 
     // 页面销毁后丢弃异步到达的扫码结果
     DisposableEffect(Unit) {
@@ -132,25 +115,34 @@ fun ScanScreen(
         if (granted) {
             barcodeView?.resume()
             showCover = false
-            onStarted()
         }
     }
 
-    fun startScan() {
-        if (!permissionGranted) {
+    // 相机视图创建完就启动 —— 不需要用户再点一次
+    LaunchedEffect(barcodeView) {
+        val v = barcodeView ?: return@LaunchedEffect
+        if (permissionGranted) {
+            AppLog.i("Scan", "进入即启动扫描（全屏识别）")
+            runCatching { v.resume() }
+            showCover = false
+        } else {
             permissionLauncher.launch(Manifest.permission.CAMERA)
-            return
         }
-        AppLog.i("Scan", "开始扫描")
-        barcodeView?.resume()
-        showCover = false
-        onStarted()
+    }
+
+    // 上层按返回键时先把相机停掉，否则界面毫无变化、且这 2 秒里扫到码会跳走
+    LaunchedEffect(pauseTick) {
+        if (pauseTick > 0) {
+            runCatching { barcodeView?.pause() }
+            AppLog.i("Scan", "按返回键，相机已暂停")
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = { ctx ->
                 DecoratedBarcodeView(ctx).apply {
+                    // 不画取景框：整屏都是识别区域
                     viewFinder.visibility = View.GONE
                     setStatusText("")
                     decodeContinuous(object : BarcodeCallback {
@@ -165,9 +157,6 @@ fun ScanScreen(
                                 AppLog.i("Scan", "识别到: ${text.take(100)}")
                                 if (currentOnDecoded(text)) {
                                     currentOnScanned()
-                                } else {
-                                    // 非本平台或无法识别，退回白底让用户重扫
-                                    showCover = true
                                 }
                             }
                         }
@@ -222,12 +211,11 @@ fun ScanScreen(
                             onClick = { openAppSettings(context) }
                         )
                     } else {
-                        Button(
-                            onClick = { startScan() },
-                            modifier = Modifier.height(52.dp)
-                        ) {
-                            Text("点击启动扫描", fontSize = 16.sp)
-                        }
+                        Text(
+                            text = "相机启动中…",
+                            color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                            fontSize = 13.sp
+                        )
                     }
                 }
             }

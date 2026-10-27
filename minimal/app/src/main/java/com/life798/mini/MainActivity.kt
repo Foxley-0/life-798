@@ -175,9 +175,8 @@ private fun MiniApp(
     var lastNavAt by remember { mutableLongStateOf(0L) }
     // 动画方向：push 往右进，pop 往左出（不能靠"目标是不是 TABS"判断）
     var navForward by remember { mutableStateOf(true) }
-    // 扫码页：返回时先停相机；已开始扫描的状态要跨页面重建保留
+    // 扫码页：返回时先停相机
     var scanPauseTick by remember { mutableIntStateOf(0) }
-    var scanStarted by rememberSaveable { mutableStateOf(false) }
     var confirmExitStart by remember { mutableStateOf(false) }
 
     // 登录态失效（主动登出 / token 过期）时把导航整体归零。
@@ -287,8 +286,6 @@ private fun MiniApp(
                 onBack = { requestBack() },
                 navForward = navForward,
                 scanPauseTick = scanPauseTick,
-                scanStarted = scanStarted,
-                onScanStarted = { scanStarted = true },
                 themeMode = themeMode,
                 accentMode = accentMode,
                 bottomBarStyle = bottomBarStyle,
@@ -340,8 +337,6 @@ private fun MainScaffold(
     onBack: () -> Unit,
     navForward: Boolean,
     scanPauseTick: Int,
-    scanStarted: Boolean,
-    onScanStarted: () -> Unit,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -412,8 +407,6 @@ private fun MainScaffold(
                         onBack = onBack,
                         navForward = navForward,
                         scanPauseTick = scanPauseTick,
-                        scanStarted = scanStarted,
-                        onScanStarted = onScanStarted,
                         themeMode = themeMode,
                         accentMode = accentMode,
                         bottomBarStyle = bottomBarStyle,
@@ -495,8 +488,6 @@ private fun MainContent(
     onBack: () -> Unit,
     navForward: Boolean,
     scanPauseTick: Int,
-    scanStarted: Boolean,
-    onScanStarted: () -> Unit,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -556,8 +547,6 @@ private fun MainContent(
                         onEnter = vm::clearMessage,
                         onDecoded = vm::onQrDecoded,
                         onScanned = { onPush(Route.START) },
-                        started = scanStarted,
-                        onStarted = onScanStarted,
                         pauseTick = scanPauseTick
                     )
 
