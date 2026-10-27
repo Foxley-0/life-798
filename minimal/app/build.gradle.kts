@@ -111,8 +111,13 @@ dependencies {
 
     // 扫码：用成熟封装库，避免自己处理帧旋转/裁剪/二值化
     // 纯 Java 实现，不依赖 Google Play 服务
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-    implementation("com.google.zxing:core:3.5.3")
+    // CameraX：相机预览 + 图像分析两条独立管线
+    implementation("androidx.camera:camera-core:1.6.2")
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("androidx.camera:camera-view:1.6.2")
+    // ML Kit 条码识别：bundled 版，模型打进 APK，不依赖 GMS
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
