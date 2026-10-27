@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -110,8 +111,9 @@ fun ScanScreen(
 
     val previewView = remember {
         PreviewView(context).apply {
-            // FIT_CENTER：屏幕看到的 = 实际分析的整帧（FILL_CENTER 会裁边）
-            scaleType = PreviewView.ScaleType.FIT_CENTER
+            // FILL_CENTER：铺满屏幕、无黑边。等比缩放只裁边不变形；
+            // 裁掉的区域不影响识别 —— ImageAnalysis 分析的始终是完整帧
+            scaleType = PreviewView.ScaleType.FILL_CENTER
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
@@ -193,22 +195,28 @@ fun ScanScreen(
         val provider = awaitCameraProvider(context)
         cameraProvider = provider
 
-        val preview = Preview.Builder().build().also {
-            it.surfaceProvider = previewView.surfaceProvider
-        }
+        // Preview 与 ImageAnalysis 必须共用同一个 selector，
+        // 否则「屏幕看到的画面」和「实际分析的画面」不是同一块区域。
+        // 优先 16:9：设备给 4:3（1920x1440）时铺满竖屏会裁掉太多
+        val selector = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .setResolutionStrategy(
+                ResolutionStrategy(
+                    Size(1920, 1080),
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                )
+            )
+            .build()
+
+        val preview = Preview.Builder()
+            .setResolutionSelector(selector)
+            .build()
+            .also {
+                it.surfaceProvider = previewView.surfaceProvider
+            }
 
         val analysis = ImageAnalysis.Builder()
-            // 默认 640×480 太小，小码会糊；显式要 1080p
-            .setResolutionSelector(
-                ResolutionSelector.Builder()
-                    .setResolutionStrategy(
-                        ResolutionStrategy(
-                            Size(1920, 1080),
-                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
-                        )
-                    )
-                    .build()
-            )
+            .setResolutionSelector(selector)
             // 只保留最新帧，避免积压导致延迟越来越高
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
@@ -285,7 +293,8 @@ fun ScanScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.White),
+                    // 与页面背景同色，跟随主题（深色下自动变深，不会闪浅灰）
+                    .background(MiuixTheme.colorScheme.background),
                 contentAlignment = Alignment.Center
             ) {
                 Column(

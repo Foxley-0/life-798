@@ -5,10 +5,13 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
+import top.yukonga.miuix.kmp.theme.darkColorScheme
+import top.yukonga.miuix.kmp.theme.lightColorScheme
 
 /** 主题模式：跟随系统 / 浅色 / 深色。 */
 const val THEME_SYSTEM = 0
@@ -54,7 +57,23 @@ fun MiniTheme(
         base
     }
 
-    val controller = remember(mode) { ThemeController(mode) }
+    val controller = remember(mode) {
+        // 自定义背景色：miuix 默认 background 和卡片 surfaceContainer 都是纯白，
+        // 卡片完全看不出轮廓。这里把页面背景压成 #F2F3F5，卡片保持白色。
+        // monet（跟随壁纸）模式不覆盖 —— 壁纸配色本身就自带层次。
+        when (mode) {
+            ColorSchemeMode.MonetLight,
+            ColorSchemeMode.MonetDark,
+            ColorSchemeMode.MonetSystem,
+            -> ThemeController(mode)
+
+            else -> ThemeController(
+                colorSchemeMode = mode,
+                lightColors = lightColorScheme(background = Color(0xFFF2F3F5)),
+                darkColors = darkColorScheme(background = Color(0xFF121212)),
+            )
+        }
+    }
 
     val config = LocalConfiguration.current
     val nightMode = when (mode) {
