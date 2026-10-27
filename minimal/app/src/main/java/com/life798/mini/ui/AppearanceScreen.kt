@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -28,26 +27,26 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 private val THEME_OPTIONS = listOf("跟随系统", "浅色", "深色")
 private val ACCENT_OPTIONS = listOf("MIUI 蓝", "跟随壁纸")
+private val BOTTOM_BAR_OPTIONS = listOf("胶囊悬浮", "经典长条")
 
 /**
  * 外观设置。
  *
- * 结构照 SonyPods 的 ThemeSettingsPage：两个 OverlayDropdownPreference，
+ * 结构照 SonyPods 的 ThemeSettingsPage：一组 OverlayDropdownPreference，
  * 点开是 miuix 原生下拉弹窗，选中即生效并落盘，没有「确定」按钮。
  */
 @Composable
 fun AppearanceScreen(
     themeMode: Int,
     accentMode: Int,
+    bottomBarStyle: Int,
     onThemeMode: (Int) -> Unit,
     onAccentMode: (Int) -> Unit,
+    onBottomBarStyle: (Int) -> Unit,
     onBack: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-    ) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // SmallTopAppBar 自带状态栏 inset，外层不要再加 statusBarsPadding
         SmallTopAppBar(
             title = "外观",
             navigationIcon = {
@@ -64,7 +63,8 @@ fun AppearanceScreen(
 
         LazyColumn(
             modifier = Modifier
-                .fillMaxSize()
+                .weight(1f)
+                .fillMaxWidth()
                 .navigationBarsPadding(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp)
         ) {
@@ -88,11 +88,18 @@ fun AppearanceScreen(
                         selectedIndex = accentMode.coerceIn(ACCENT_OPTIONS.indices),
                         onSelectedIndexChange = onAccentMode
                     )
+                    OverlayDropdownPreference(
+                        title = "底栏样式",
+                        summary = "胶囊悬浮更接近 HyperOS，长条更传统",
+                        items = BOTTOM_BAR_OPTIONS,
+                        selectedIndex = bottomBarStyle.coerceIn(BOTTOM_BAR_OPTIONS.indices),
+                        onSelectedIndexChange = onBottomBarStyle
+                    )
                 }
 
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    text = "配色变化会立即应用到按钮、开关与高亮项。",
+                    text = "配色与底栏样式会立即生效，不需要重启。",
                     fontSize = 12.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.padding(horizontal = 4.dp)

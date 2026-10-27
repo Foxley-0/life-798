@@ -34,8 +34,17 @@ sealed interface QrResult {
  */
 object QrParser {
 
-    /** 编号允许的字符集：字母、数字、下划线、连字符。长度下限 2，避免短编号被误判。 */
+    /** 编号允许的字符集：字母、数字、下划线、连字符。 */
     private val PLAIN = Regex("^[A-Za-z0-9_-]{2,64}$")
+
+    /**
+     * 纯文本形态的编号要求更严：至少 6 位、且至少含 5 个数字。
+     *
+     * 因为没有任何域名可以佐证来源，`OK`、`v1`、`123` 这类普通文本会被 [PLAIN] 放行，
+     * 直接当成设备号送进启动页 —— 用户会莫名其妙跳到一个空设备上。
+     * URL 形态不受此限制，那里有域名和路径结构做依据。
+     */
+    private val PLAIN_STRICT = Regex("^(?=(?:.*[0-9]){5,})[A-Za-z0-9_-]{6,64}$")
 
     /** 优先尝试的参数名，顺序即优先级。 */
     private val PREFERRED_KEYS =
@@ -51,8 +60,14 @@ object QrParser {
         val text = raw?.trim().orEmpty()
         if (text.isEmpty()) return QrResult.Unrecognized(text)
 
-        // 1. 纯编号：没有域名可判断来源，放行（可能是手工输入或老码）
-        if (PLAIN.matches(text)) return QrResult.Ok(text, host = "")
+        // 1. 纯编号：没有域名可判断来源，必须满足更严的格式，否则当普通文本拒掉
+        if (PLAIN.matches(text)) {
+            return if (PLAIN_STRICT.matches(text)) {
+                QrResult.Ok(text, host = "")
+            } else {
+                QrResult.Unrecognized(text)
+            }
+        }
 
         // 2. URL 形态
         val uri = runCatching {

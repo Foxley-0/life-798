@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -43,6 +44,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.UiPrefs
@@ -64,6 +66,9 @@ import com.life798.mini.ui.components.barBlurBackground
 import com.life798.mini.ui.isDarkTheme
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.FloatingNavigationBar
+import top.yukonga.miuix.kmp.basic.FloatingNavigationBarItem
+import top.yukonga.miuix.kmp.basic.FloatingToolbarDefaults
 import top.yukonga.miuix.kmp.basic.NavigationBar
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -80,8 +85,7 @@ private enum class Tab { SCAN, SETTINGS }
 /**
  * 路由。TABS 是底部导航的根，其余都是叠在它上面的二级页。
  *
- * 返回键只做一件事：出栈。所有页面都不再自己挂 BackHandler ——
- * 上一版每页各自拦截、根层没人接管，扫码页按返回会直接退出应用。
+ * 返回键只做一件事：出栈。所有页面都不再自己挂 BackHandler。
  */
 private enum class Route { TABS, START, LOG, ABOUT, THEME }
 
@@ -89,6 +93,8 @@ private val RouteStackSaver = listSaver<List<String>, String>(
     save = { it },
     restore = { it }
 )
+
+private const val MAX_STACK_DEPTH = 5
 
 class MainActivity : ComponentActivity() {
 
@@ -103,6 +109,7 @@ class MainActivity : ComponentActivity() {
 
             var themeMode by rememberSaveable { mutableIntStateOf(prefs.themeMode) }
             var accentMode by rememberSaveable { mutableIntStateOf(prefs.accentMode) }
+            var bottomBarStyle by rememberSaveable { mutableIntStateOf(prefs.bottomBarStyle) }
 
             val dark = isDarkTheme(themeMode)
             LaunchedEffect(dark) {
@@ -125,6 +132,7 @@ class MainActivity : ComponentActivity() {
                     vm = vm,
                     themeMode = themeMode,
                     accentMode = accentMode,
+                    bottomBarStyle = bottomBarStyle,
                     onThemeMode = {
                         themeMode = it
                         prefs.themeMode = it
@@ -132,6 +140,10 @@ class MainActivity : ComponentActivity() {
                     onAccentMode = {
                         accentMode = it
                         prefs.accentMode = it
+                    },
+                    onBottomBarStyle = {
+                        bottomBarStyle = it
+                        prefs.bottomBarStyle = it
                     }
                 )
             }
@@ -147,8 +159,10 @@ private fun MiniApp(
     vm: AppViewModel,
     themeMode: Int,
     accentMode: Int,
+    bottomBarStyle: Int,
     onThemeMode: (Int) -> Unit,
-    onAccentMode: (Int) -> Unit
+    onAccentMode: (Int) -> Unit,
+    onBottomBarStyle: (Int) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -159,7 +173,38 @@ private fun MiniApp(
     var lastBackAt by remember { mutableLongStateOf(0L) }
     var confirmExitStart by remember { mutableStateOf(false) }
 
+    // 登录态失效（主动登出 / token 过期）时把导航整体归零。
+    // 否则重新登录会直接落在上一次停留的页面，甚至卡在一个没有设备号的启动页。
+    LaunchedEffect(state.loggedIn) {
+        if (!state.loggedIn) {
+            if (stack.isNotEmpty() || tab != Tab.SCAN.name) {
+                AppLog.i("Nav", "登录态失效，重置导航 stack=$stack tab=$tab")
+            }
+            stack = emptyList()
+            tab = Tab.SCAN.name
+        }
+    }
+
+    // 栈里留着 START 但没有设备号（进程重建后设备号不落盘）→ 自动退回扫码页
+    LaunchedEffect(stack, state.deviceId, state.loggedIn) {
+        if (state.loggedIn &&
+            stack.lastOrNull() == Route.START.name &&
+            state.deviceId.isBlank()
+        ) {
+            AppLog.i("Nav", "启动页缺少设备号，自动出栈")
+            stack = stack.dropLast(1)
+        }
+    }
+
     fun push(route: Route) {
+        if (stack.lastOrNull() == route.name) {
+            AppLog.i("Nav", "忽略重复入栈 ${route.name}")
+            return
+        }
+        if (stack.size >= MAX_STACK_DEPTH) {
+            AppLog.w("Nav", "栈深已达上限，忽略 ${route.name}")
+            return
+        }
         AppLog.i("Nav", "push ${route.name}")
         stack = stack + route.name
     }
@@ -203,7 +248,6 @@ private fun MiniApp(
     }
 
     // 外层 Scaffold 只做一件事：挂载 MiuixPopupHost，让 OverlayDialog 有地方渲染。
-    // 布局与 inset 都交给内层 —— 两层都设 0，谁也不偷谁的。
     Scaffold(
         containerColor = MiuixTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0)
@@ -219,8 +263,10 @@ private fun MiniApp(
                 onBack = { requestBack() },
                 themeMode = themeMode,
                 accentMode = accentMode,
+                bottomBarStyle = bottomBarStyle,
                 onThemeMode = onThemeMode,
-                onAccentMode = onAccentMode
+                onAccentMode = onAccentMode,
+                onBottomBarStyle = onBottomBarStyle
             )
         }
     }
@@ -266,8 +312,10 @@ private fun MainScaffold(
     onBack: () -> Unit,
     themeMode: Int,
     accentMode: Int,
+    bottomBarStyle: Int,
     onThemeMode: (Int) -> Unit,
-    onAccentMode: (Int) -> Unit
+    onAccentMode: (Int) -> Unit,
+    onBottomBarStyle: (Int) -> Unit
 ) {
     val current = stack.lastOrNull()
     // 底栏只在「已登录 + 停在 TABS 根」时出现；登录页、加载页、二级页都不该有
@@ -277,37 +325,22 @@ private fun MainScaffold(
         containerColor = MiuixTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            // 底栏进 slot：不被父级 padding 限制，miuix NavigationBar 自己会补
-            // navigationBars 的底部高度，背景于是铺到屏幕最底（小白条沉浸）。
             AnimatedVisibility(
                 visible = isTabs,
                 enter = slideInVertically(tween(260)) { it } + fadeIn(tween(180)),
                 exit = slideOutVertically(tween(200)) { it } + fadeOut(tween(140))
             ) {
-                NavigationBar(
-                    modifier = Modifier.barBlurBackground(RectangleShape),
-                    color = Color.Transparent,
-                    showDivider = true
-                ) {
-                    NavigationBarItem(
-                        selected = tab == Tab.SCAN.name,
-                        onClick = { onTabChange(Tab.SCAN.name) },
-                        icon = MiuixIcons.Scan,
-                        label = "扫描"
-                    )
-                    NavigationBarItem(
-                        selected = tab == Tab.SETTINGS.name,
-                        onClick = { onTabChange(Tab.SETTINGS.name) },
-                        icon = MiuixIcons.Settings,
-                        label = "设置"
-                    )
-                }
+                BottomBar(
+                    tab = tab,
+                    onTabChange = onTabChange,
+                    style = bottomBarStyle
+                )
             }
         }
     ) { padding ->
         val bottomInset = padding.calculateBottomPadding()
 
-        // 内容层标记为「会被底栏采样」——滚动时内容在栏下虚化，而不是栏自己糊自己
+        // 内容层标记为「会被底栏采样」——滚动时内容在栏下虚化
         BarBackdropContent(modifier = Modifier.fillMaxSize()) {
             AnimatedContent(
                 targetState = when {
@@ -340,11 +373,69 @@ private fun MainScaffold(
                         onBack = onBack,
                         themeMode = themeMode,
                         accentMode = accentMode,
+                        bottomBarStyle = bottomBarStyle,
                         onThemeMode = onThemeMode,
-                        onAccentMode = onAccentMode
+                        onAccentMode = onAccentMode,
+                        onBottomBarStyle = onBottomBarStyle
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 底栏。两种形态共用同一套毛玻璃采样：
+ * - 胶囊：`FloatingNavigationBar`，宽度 wrap content + 居中，圆角取 `FloatingToolbarDefaults.CornerRadius`
+ * - 长条：`NavigationBar`，全宽 + 顶部细线
+ *
+ * 关键：`FloatingNavigationBar` 的 modifier 最终作用在内部 Row 上（不是外层 Column），
+ * 所以模糊层的 shape 必须是圆角矩形，否则会把胶囊盖成方的。
+ */
+@Composable
+private fun BottomBar(
+    tab: String,
+    onTabChange: (String) -> Unit,
+    style: Int
+) {
+    if (style == UiPrefs.BOTTOM_BAR_PILL) {
+        FloatingNavigationBar(
+            modifier = Modifier
+                .barBlurBackground(RoundedCornerShape(FloatingToolbarDefaults.CornerRadius))
+                .zIndex(2f),
+            color = Color.Transparent
+        ) {
+            FloatingNavigationBarItem(
+                selected = tab == Tab.SCAN.name,
+                onClick = { onTabChange(Tab.SCAN.name) },
+                icon = MiuixIcons.Scan,
+                label = "扫描"
+            )
+            FloatingNavigationBarItem(
+                selected = tab == Tab.SETTINGS.name,
+                onClick = { onTabChange(Tab.SETTINGS.name) },
+                icon = MiuixIcons.Settings,
+                label = "设置"
+            )
+        }
+    } else {
+        NavigationBar(
+            modifier = Modifier.barBlurBackground(RectangleShape),
+            color = Color.Transparent,
+            showDivider = true
+        ) {
+            NavigationBarItem(
+                selected = tab == Tab.SCAN.name,
+                onClick = { onTabChange(Tab.SCAN.name) },
+                icon = MiuixIcons.Scan,
+                label = "扫描"
+            )
+            NavigationBarItem(
+                selected = tab == Tab.SETTINGS.name,
+                onClick = { onTabChange(Tab.SETTINGS.name) },
+                icon = MiuixIcons.Settings,
+                label = "设置"
+            )
         }
     }
 }
@@ -361,8 +452,10 @@ private fun MainContent(
     onBack: () -> Unit,
     themeMode: Int,
     accentMode: Int,
+    bottomBarStyle: Int,
     onThemeMode: (Int) -> Unit,
-    onAccentMode: (Int) -> Unit
+    onAccentMode: (Int) -> Unit,
+    onBottomBarStyle: (Int) -> Unit
 ) {
     AnimatedContent(
         targetState = current ?: Route.TABS.name,
@@ -395,8 +488,10 @@ private fun MainContent(
             Route.THEME.name -> AppearanceScreen(
                 themeMode = themeMode,
                 accentMode = accentMode,
+                bottomBarStyle = bottomBarStyle,
                 onThemeMode = onThemeMode,
                 onAccentMode = onAccentMode,
+                onBottomBarStyle = onBottomBarStyle,
                 onBack = onBack
             )
 

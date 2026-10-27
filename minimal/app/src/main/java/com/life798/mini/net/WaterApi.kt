@@ -133,12 +133,6 @@ class WaterApi(
         call(req) { Unit }
     }
 
-    suspend fun devEnd(token: String, deviceId: String): ApiResult<Unit> = io {
-        val url = "$base/dev/end?did=${encode(deviceId)}&rcp=false"
-        val req = builder(url).header("Authorization", token).get().build()
-        call(req) { Unit }
-    }
-
     // ---------- 内部工具 ----------
 
     private fun builder(url: String): Request.Builder = Request.Builder()

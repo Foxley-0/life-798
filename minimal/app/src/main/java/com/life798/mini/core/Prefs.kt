@@ -10,8 +10,9 @@ import kotlinx.coroutines.flow.map
 private val Context.store by preferencesDataStore(name = "mini_prefs")
 
 /**
- * 只存四样东西：token、uid、手机号、最近使用的设备。
- * 没有数据库、没有多账户、没有历史记录。
+ * 只存三样东西：token、uid、手机号。
+ *
+ * 设备编号故意不落盘 —— 每次启动 App 都必须重新扫码，避免误用上一台设备。
  */
 class Prefs(context: Context) {
 
@@ -20,11 +21,9 @@ class Prefs(context: Context) {
     private val keyToken = stringPreferencesKey("token")
     private val keyUid = stringPreferencesKey("uid")
     private val keyPhone = stringPreferencesKey("phone")
-    private val keyDevice = stringPreferencesKey("device_id")
 
     val token: Flow<String> = appContext.store.data.map { it[keyToken].orEmpty() }
     val phone: Flow<String> = appContext.store.data.map { it[keyPhone].orEmpty() }
-    val deviceId: Flow<String> = appContext.store.data.map { it[keyDevice].orEmpty() }
 
     suspend fun saveSession(token: String, uid: String, phone: String) {
         appContext.store.edit {
@@ -32,10 +31,6 @@ class Prefs(context: Context) {
             it[keyUid] = uid
             it[keyPhone] = phone
         }
-    }
-
-    suspend fun saveDevice(id: String) {
-        appContext.store.edit { it[keyDevice] = id }
     }
 
     suspend fun clearSession() {

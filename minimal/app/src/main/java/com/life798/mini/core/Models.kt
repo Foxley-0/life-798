@@ -1,12 +1,5 @@
 package com.life798.mini.core
 
-/** 本地保存的设备。 */
-data class Device(
-    val id: String,
-    val alias: String = "",
-    val lastUsedAt: Long = 0L
-)
-
 /** 网络返回的统一封装。 */
 sealed interface ApiResult<out T> {
     data class Ok<T>(val data: T) : ApiResult<T>

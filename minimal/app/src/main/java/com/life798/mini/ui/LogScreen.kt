@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,11 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,8 +87,11 @@ fun LogScreen(onBack: () -> Unit) {
     var content by remember { mutableStateOf(AppLog.dump()) }
     var tip by remember { mutableStateOf<String?>(null) }
 
-    // 系统返回键回设置页，而不是退出应用
-    BackHandler { onBack() }
+    // 进页刷新一次，否则看到的是上次离开时的日志
+    LaunchedEffect(Unit) { content = AppLog.dump() }
+
+    // 返回由根级统一处理。这里以前挂过 BackHandler，会和根级同时激活，
+    // 过渡期连按两次返回会一次退两层。
 
     val entries = remember(content) {
         content.lines().mapNotNull { line ->
@@ -100,7 +102,6 @@ fun LogScreen(onBack: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
             .navigationBarsPadding()
     ) {
         SmallTopAppBar(

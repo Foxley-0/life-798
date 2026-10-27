@@ -176,7 +176,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun logout() {
         viewModelScope.launch {
             prefs.clearSession()
-            _ui.value = _ui.value.copy(token = "")
+            // 设备号也要清：否则重新登录后可能对着上一台设备直接点启动
+            _ui.value = _ui.value.copy(
+                token = "",
+                deviceId = "",
+                message = null,
+                messageIsError = false
+            )
             refreshCaptcha()
         }
     }
