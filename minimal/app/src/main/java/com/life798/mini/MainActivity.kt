@@ -230,6 +230,11 @@ private fun MiniApp(
 
     /** 返回按钮与系统返回键走同一条路：启动页先弹确认，其余直接出栈。 */
     fun requestBack() {
+        // 弹窗已经开着就忽略，避免一次按键被两条通道各触发一次
+        if (confirmExitStart) {
+            AppLog.i("Nav", "弹窗已打开，忽略重复返回")
+            return
+        }
         val now = System.currentTimeMillis()
         if (now - lastNavAt < 220L) {
             AppLog.i("Nav", "返回过快，忽略")
@@ -270,8 +275,11 @@ private fun MiniApp(
         }
     }
 
-    // 外层 Scaffold 只做一件事：挂载 MiuixPopupHost，让 OverlayDialog 有地方渲染。
-    Scaffold(
+    // Scaffold 与弹窗必须有共同父容器，否则它们是兄弟节点，
+    // 弹窗会渲染到未定义位置（表现为「点了没反应」）
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 外层 Scaffold 只做一件事：挂载 MiuixPopupHost，让 OverlayDialog 有地方渲染。
+        Scaffold(
         containerColor = MiuixTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { _ ->
@@ -323,6 +331,7 @@ private fun MiniApp(
                 }
             }
         }
+    }
     }
 }
 

@@ -163,7 +163,14 @@ fun ScanScreen(
                                     return@post
                                 }
                                 pause()
-                                AppLog.i("Scan", "识别到: ${text.take(100)}")
+                                // 打出码在图像里的实际坐标：能扫到左上角说明解码覆盖了边缘
+                                val pts = result?.result?.resultPoints
+                                    ?.joinToString { "(${it.x.toInt()},${it.y.toInt()})" }
+                                    .orEmpty()
+                                AppLog.i(
+                                    "Scan",
+                                    "识别到: ${text.take(100)} 码位置=$pts"
+                                )
                                 if (currentOnDecoded(text)) {
                                     currentOnScanned()
                                 }

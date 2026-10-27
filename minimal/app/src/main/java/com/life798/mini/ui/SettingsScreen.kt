@@ -111,34 +111,35 @@ fun SettingsScreen(
                 }
             }
         }
-    }
 
-    if (showLogoutConfirm) {
-        OverlayDialog(
-            show = true,
-            title = "确定退出登录吗？",
-            summary = "退出后需要重新登录，设备编号会被清除。",
-            onDismissRequest = { showLogoutConfirm = false }
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+        if (showLogoutConfirm) {
+            OverlayDialog(
+                show = true,
+                title = "确定退出登录吗？",
+                summary = "退出后需要重新登录，设备编号会被清除。",
+                onDismissRequest = { showLogoutConfirm = false }
             ) {
-                TextButton(
-                    text = "取消",
-                    onClick = { showLogoutConfirm = false },
-                    modifier = Modifier.weight(1f)
-                )
-                Button(
-                    onClick = {
-                        showLogoutConfirm = false
-                        onLogout()
-                    },
-                    modifier = Modifier.weight(1f)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("确定")
+                    TextButton(
+                        text = "取消",
+                        onClick = { showLogoutConfirm = false },
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(
+                        onClick = {
+                            showLogoutConfirm = false
+                            onLogout()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("确定")
+                    }
                 }
             }
         }
     }
+
 }

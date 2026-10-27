@@ -223,9 +223,8 @@ fun AboutScreen(
                 )
             )
         }
-    }
 
-    if (showLicenses) {
+        if (showLicenses) {
         OverlayDialog(
             show = true,
             title = "开源许可",
@@ -245,6 +244,7 @@ fun AboutScreen(
                 )
             }
         }
+    }
     }
 }
 
