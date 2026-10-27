@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -292,6 +294,7 @@ private fun MiniApp(
                 onBack = { requestBack() },
                 navForward = navForward,
                 scanPauseTick = scanPauseTick,
+                onPauseScan = { scanPauseTick++ },
                 themeMode = themeMode,
                 accentMode = accentMode,
                 bottomBarStyle = bottomBarStyle,
@@ -343,6 +346,7 @@ private fun MainScaffold(
     onBack: () -> Unit,
     navForward: Boolean,
     scanPauseTick: Int,
+    onPauseScan: () -> Unit,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -413,6 +417,7 @@ private fun MainScaffold(
                         onBack = onBack,
                         navForward = navForward,
                         scanPauseTick = scanPauseTick,
+                        onPauseScan = onPauseScan,
                         themeMode = themeMode,
                         accentMode = accentMode,
                         bottomBarStyle = bottomBarStyle,
@@ -494,6 +499,7 @@ private fun MainContent(
     onBack: () -> Unit,
     navForward: Boolean,
     scanPauseTick: Int,
+    onPauseScan: () -> Unit,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -540,30 +546,49 @@ private fun MainContent(
                 onBack = onBack
             )
 
-            else -> AnimatedContent(
-                targetState = tab,
-                transitionSpec = {
-                    fadeIn(tween(200)) togetherWith fadeOut(tween(150))
-                },
-                label = "tab"
-            ) { currentTab ->
-                when (currentTab) {
-                    Tab.SCAN.name -> ScanScreen(
-                        state = state,
-                        onEnter = vm::clearMessage,
-                        onDecoded = vm::onQrDecoded,
-                        onScanned = { onPush(Route.START) },
-                        pauseTick = scanPauseTick
-                    )
+            else -> {
+                val pagerState = rememberPagerState(
+                    initialPage = if (tab == Tab.SCAN.name) 0 else 1
+                ) { 2 }
 
-                    else -> SettingsScreen(
-                        state = state,
-                        bottomInset = bottomInset,
-                        onOpenAppearance = { onPush(Route.THEME) },
-                        onOpenLog = { onPush(Route.LOG) },
-                        onOpenAbout = { onPush(Route.ABOUT) },
-                        onLogout = vm::logout
-                    )
+                // 滑动 → 同步 tab；离开扫码页时暂停相机，否则相机会在后台一直跑
+                LaunchedEffect(pagerState.currentPage) {
+                    val newTab =
+                        if (pagerState.currentPage == 0) Tab.SCAN.name else Tab.SETTINGS.name
+                    if (tab != newTab) onTabChange(newTab)
+                    if (pagerState.currentPage != 0) onPauseScan()
+                }
+
+                // 点底栏 → 滚到对应页（用 currentPage 判断，避免两个 effect 互相触发）
+                LaunchedEffect(tab) {
+                    val target = if (tab == Tab.SCAN.name) 0 else 1
+                    if (pagerState.currentPage != target) {
+                        pagerState.animateScrollToPage(target)
+                    }
+                }
+
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize()
+                ) { page ->
+                    when (page) {
+                        0 -> ScanScreen(
+                            state = state,
+                            onEnter = vm::clearMessage,
+                            onDecoded = vm::onQrDecoded,
+                            onScanned = { onPush(Route.START) },
+                            pauseTick = scanPauseTick
+                        )
+
+                        else -> SettingsScreen(
+                            state = state,
+                            bottomInset = bottomInset,
+                            onOpenAppearance = { onPush(Route.THEME) },
+                            onOpenLog = { onPush(Route.LOG) },
+                            onOpenAbout = { onPush(Route.ABOUT) },
+                            onLogout = vm::logout
+                        )
+                    }
                 }
             }
         }

@@ -30,6 +30,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.input.KeyboardType
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Text
@@ -102,91 +104,99 @@ fun LoginScreen(
             Spacer(Modifier.height(16.dp))
         }
 
-        TextField(
-            value = phone,
-            onValueChange = { if (it.length <= 11) phone = it.filter(Char::isDigit) },
-            label = "手机号",
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // 输入框组包进白卡片：miuix 的 TextField 填充是 surface(#F7F7F7)，
+        // 直接放灰底(#F2F3F5)上只差 5 级灰，边界完全看不出
+        Card(modifier = Modifier.fillMaxWidth()) {
             TextField(
-                value = graphCode,
-                onValueChange = { if (it.length <= 6) graphCode = it },
-                label = "图形验证码",
+                value = phone,
+                onValueChange = { if (it.length <= 11) phone = it.filter(Char::isDigit) },
+                label = "手机号",
                 singleLine = true,
-                modifier = Modifier.weight(1f)
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                modifier = Modifier.fillMaxWidth()
             )
-            Spacer(Modifier.width(12.dp))
-            Box(
-                modifier = Modifier
-                    .size(width = 108.dp, height = 56.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MiuixTheme.colorScheme.secondaryVariant)
-                    .clickable { onRefreshCaptcha() },
-                contentAlignment = Alignment.Center
-            ) {
-                when {
-                    state.captchaLoading -> CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp)
-                    )
 
-                    captchaBitmap != null -> Image(
-                        bitmap = captchaBitmap.asImageBitmap(),
-                        contentDescription = "图形验证码，点击刷新",
-                        modifier = Modifier.fillMaxSize()
-                    )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextField(
+                    value = graphCode,
+                    onValueChange = { if (it.length <= 6) graphCode = it },
+                    label = "图形验证码",
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(12.dp))
+                Box(
+                    modifier = Modifier
+                        .size(width = 108.dp, height = 56.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MiuixTheme.colorScheme.secondaryVariant)
+                        .clickable { onRefreshCaptcha() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    when {
+                        state.captchaLoading -> CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp)
+                        )
 
-                    else -> Text(
-                        text = if (state.captchaError != null) "加载失败\n点此重试" else "点此加载",
-                        fontSize = 11.sp,
-                        lineHeight = 14.sp,
-                        color = MiuixTheme.colorScheme.primary,
-                        textAlign = TextAlign.Center
-                    )
+                        captchaBitmap != null -> Image(
+                            bitmap = captchaBitmap.asImageBitmap(),
+                            contentDescription = "图形验证码，点击刷新",
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        else -> Text(
+                            text = if (state.captchaError != null) "加载失败\n点此重试" else "点此加载",
+                            fontSize = 11.sp,
+                            lineHeight = 14.sp,
+                            color = MiuixTheme.colorScheme.primary,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
-        }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = state.captchaError.orEmpty(),
-                fontSize = 11.sp,
-                color = MiuixTheme.colorScheme.error,
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(
-                text = "换一张",
-                onClick = onRefreshCaptcha,
-                enabled = !state.captchaLoading
-            )
-        }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = state.captchaError.orEmpty(),
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    text = "换一张",
+                    onClick = onRefreshCaptcha,
+                    enabled = !state.captchaLoading,
+                    colors = ButtonDefaults.textButtonColors(
+                        color = Color.Transparent,
+                        textColor = MiuixTheme.colorScheme.primary
+                    )
+                )
+            }
 
-        Spacer(Modifier.height(4.dp))
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextField(
-                value = smsCode,
-                onValueChange = { if (it.length <= 8) smsCode = it.filter(Char::isDigit) },
-                label = "短信验证码",
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(12.dp))
-            TextButton(
-                text = if (state.smsCountdown > 0) "${state.smsCountdown}s" else "获取验证码",
-                onClick = { onSendSms(phone, graphCode) },
-                enabled = state.smsCountdown == 0 && !state.busy && state.configured
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextField(
+                    value = smsCode,
+                    onValueChange = { if (it.length <= 8) smsCode = it.filter(Char::isDigit) },
+                    label = "短信验证码",
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(12.dp))
+                TextButton(
+                    text = if (state.smsCountdown > 0) "${state.smsCountdown}s" else "获取验证码",
+                    onClick = { onSendSms(phone, graphCode) },
+                    enabled = state.smsCountdown == 0 && !state.busy && state.configured,
+                    colors = ButtonDefaults.textButtonColors(
+                        color = Color.Transparent,
+                        textColor = MiuixTheme.colorScheme.primary
+                    )
+                )
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -194,6 +204,8 @@ fun LoginScreen(
         Button(
             onClick = { onLogin(phone, smsCode) },
             enabled = !state.busy && state.configured,
+            // 默认 buttonColors() 是 secondaryVariant（灰底），必须显式换主色
+            colors = ButtonDefaults.buttonColorsPrimary(),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp)
