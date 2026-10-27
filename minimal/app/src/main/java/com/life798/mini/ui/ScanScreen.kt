@@ -8,7 +8,6 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.view.View
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -42,8 +41,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.journeyapps.barcodescanner.BarcodeCallback
 import com.journeyapps.barcodescanner.BarcodeResult
-import com.journeyapps.barcodescanner.DecoratedBarcodeView
+import com.journeyapps.barcodescanner.camera.FitCenterStrategy
 import com.life798.mini.core.AppLog
+import com.life798.mini.ui.components.FullScreenBarcodeView
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -75,7 +75,7 @@ fun ScanScreen(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var showCover by remember { mutableStateOf(true) }
-    var barcodeView by remember { mutableStateOf<DecoratedBarcodeView?>(null) }
+    var barcodeView by remember { mutableStateOf<FullScreenBarcodeView?>(null) }
     var permissionDenied by remember { mutableStateOf(false) }
     var alive by remember { mutableStateOf(true) }
     var permissionGranted by remember {
@@ -116,6 +116,7 @@ fun ScanScreen(
         if (granted) {
             barcodeView?.resume()
             showCover = false
+            logScanGeometry(mainHandler, barcodeView)
         }
     }
 
@@ -128,6 +129,7 @@ fun ScanScreen(
         AppLog.i("Scan", "开始扫描")
         runCatching { barcodeView?.resume() }
         showCover = false
+        logScanGeometry(mainHandler, barcodeView)
     }
 
     // 只负责首次申请权限；真正的启动由用户点「点击启动扫描」
@@ -148,10 +150,10 @@ fun ScanScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = { ctx ->
-                DecoratedBarcodeView(ctx).apply {
-                    // 不画取景框：整屏都是识别区域
-                    viewFinder.visibility = View.GONE
-                    setStatusText("")
+                FullScreenBarcodeView(ctx).apply {
+                    // FitCenter：屏幕看到的画面 = 实际参与解码的那一帧，
+                    // 避免 CenterCrop 把边缘裁掉「解码到了但看不见」
+                    setPreviewScalingStrategy(FitCenterStrategy())
                     decodeContinuous(object : BarcodeCallback {
                         override fun barcodeResult(result: BarcodeResult?) {
                             val text = result?.text ?: return
@@ -231,8 +233,22 @@ fun ScanScreen(
     }
 }
 
-private fun openAppSettings(context: android.content.Context) {
-    runCatching {
+/**
+ * 打一次几何信息，用来确认解码区域到底是不是整屏。
+ * 改之前 framing 会是屏幕中间的正方形，改之后应该等于整屏。
+ */
+private fun logScanGeometry(handler: Handler, view: FullScreenBarcodeView?) {
+    handler.postDelayed({
+        val v = view ?: return@postDelayed
+        AppLog.i(
+            "Scan",
+            "预览=${v.previewSize} 容器=${v.width}x${v.height} " +
+                "framing=${v.framingRect} previewFraming=${v.previewFramingRect}"
+        )
+    }, 800)
+}
+
+private fun openAppSettings(context: android.content.Context) {    runCatching {
         context.startActivity(
             Intent(
                 Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
