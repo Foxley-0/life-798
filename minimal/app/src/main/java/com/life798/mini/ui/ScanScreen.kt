@@ -44,6 +44,7 @@ import com.journeyapps.barcodescanner.BarcodeCallback
 import com.journeyapps.barcodescanner.BarcodeResult
 import com.journeyapps.barcodescanner.DecoratedBarcodeView
 import com.life798.mini.core.AppLog
+import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -118,14 +119,20 @@ fun ScanScreen(
         }
     }
 
-    // 相机视图创建完就启动 —— 不需要用户再点一次
+    /** 浮层上的「点击启动扫描」：开相机、淡出浮层。 */
+    fun startScan() {
+        if (!permissionGranted) {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+            return
+        }
+        AppLog.i("Scan", "开始扫描")
+        runCatching { barcodeView?.resume() }
+        showCover = false
+    }
+
+    // 只负责首次申请权限；真正的启动由用户点「点击启动扫描」
     LaunchedEffect(barcodeView) {
-        val v = barcodeView ?: return@LaunchedEffect
-        if (permissionGranted) {
-            AppLog.i("Scan", "进入即启动扫描（全屏识别）")
-            runCatching { v.resume() }
-            showCover = false
-        } else {
+        if (barcodeView != null && !permissionGranted) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
@@ -211,11 +218,12 @@ fun ScanScreen(
                             onClick = { openAppSettings(context) }
                         )
                     } else {
-                        Text(
-                            text = "相机启动中…",
-                            color = MiuixTheme.colorScheme.onSurfaceSecondary,
-                            fontSize = 13.sp
-                        )
+                        Button(
+                            onClick = { startScan() },
+                            modifier = Modifier.height(52.dp)
+                        ) {
+                            Text("点击启动扫描", fontSize = 16.sp)
+                        }
                     }
                 }
             }

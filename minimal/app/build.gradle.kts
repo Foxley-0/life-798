@@ -90,10 +90,10 @@ kotlin {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.05.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
 
-    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.core:core-ktx:1.17.0")
     // MIUI / HyperOS 风格组件库（取代 Material3）
     implementation("top.yukonga.miuix.kmp:miuix-ui-android:0.9.4-rc01")
@@ -105,9 +105,9 @@ dependencies {
     implementation("top.yukonga.miuix.kmp:miuix-blur-android:0.9.4-rc01")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
 
     // 扫码：用成熟封装库，避免自己处理帧旋转/裁剪/二值化
     // 纯 Java 实现，不依赖 Google Play 服务
