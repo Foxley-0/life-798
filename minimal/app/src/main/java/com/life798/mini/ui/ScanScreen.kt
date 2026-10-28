@@ -307,17 +307,6 @@ fun ScanScreen(
                     verticalArrangement = Arrangement.Center,
                     modifier = Modifier.padding(32.dp)
                 ) {
-                    state.message?.let { msg ->
-                        Text(
-                            text = msg,
-                            color = MiuixTheme.colorScheme.error,
-                            fontSize = 13.sp,
-                            lineHeight = 19.sp,
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(Modifier.height(20.dp))
-                    }
-
                     if (permissionDenied) {
                         Text(
                             text = "需要相机权限才能扫码",

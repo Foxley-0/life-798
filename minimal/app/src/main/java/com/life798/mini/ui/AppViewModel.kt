@@ -11,8 +11,10 @@ import com.life798.mini.scan.QrParser
 import com.life798.mini.scan.QrResult
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -43,6 +45,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val api = WaterApi()
 
     private val _ui = MutableStateFlow(UiState(configured = api.isConfigured))
+
+    /**
+     * 临时提示事件（扫码失败等）。UI 层用 Snackbar 消费。
+     *
+     * 为什么和 state.message 分开：message 是常驻状态（登录页错误用它），
+     * 而扫码失败的提示应该短暂出现后自动消失，不该一直挂在状态里。
+     */
+    private val _toast = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val toast = _toast.asSharedFlow()
+
+    /** 同一个码 3 秒内只提示一次，否则每帧识别都会触发一次 */
+    private var lastRejectKey: String? = null
+    private var lastRejectAt = 0L
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
     private var smsTimer: Job? = null
@@ -206,13 +221,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
             is QrResult.WrongPlatform -> {
                 AppLog.w("Scan", "非慧生活798设备 host=${r.host}")
-                note("非慧生活798设备，请使用对应 App 扫码")
+                rejectOnce(r.host, "非慧生活798设备，请使用对应 App 扫码")
                 false
             }
 
             is QrResult.Unrecognized -> {
                 AppLog.w("Scan", "无法识别，原文长度=${r.raw.length}")
-                note("无法识别的二维码：${r.raw.take(30)}")
+                rejectOnce(r.raw, "无法识别的二维码：${r.raw.take(30)}")
                 false
             }
         }
@@ -278,6 +293,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun note(msg: String) {
         _ui.value = _ui.value.copy(message = msg, messageIsError = true)
+        _toast.tryEmit(msg)
+    }
+
+    /**
+     * 扫码被拒绝时的提示，带 3 秒冷却。
+     *
+     * 不加冷却的话：码一直对着镜头，每秒 30 帧都会识别到同一个码，
+     * 就会每秒推 30 条提示。
+     */
+    private fun rejectOnce(key: String, msg: String) {
+        val now = System.currentTimeMillis()
+        if (key == lastRejectKey && now - lastRejectAt < 3000L) return
+        lastRejectKey = key
+        lastRejectAt = now
+        note(msg)
     }
 
     private fun randomKey(): String {
