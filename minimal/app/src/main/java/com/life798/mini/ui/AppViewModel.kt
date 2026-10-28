@@ -1,6 +1,7 @@
 package com.life798.mini.ui
 
 import android.app.Application
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.life798.mini.core.ApiResult
@@ -11,10 +12,8 @@ import com.life798.mini.scan.QrParser
 import com.life798.mini.scan.QrResult
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -45,15 +44,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val api = WaterApi()
 
     private val _ui = MutableStateFlow(UiState(configured = api.isConfigured))
-
-    /**
-     * 临时提示事件（扫码失败等）。UI 层用 Snackbar 消费。
-     *
-     * 为什么和 state.message 分开：message 是常驻状态（登录页错误用它），
-     * 而扫码失败的提示应该短暂出现后自动消失，不该一直挂在状态里。
-     */
-    private val _toast = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    val toast = _toast.asSharedFlow()
 
     /** 同一个码 3 秒内只提示一次，否则每帧识别都会触发一次 */
     private var lastRejectKey: String? = null
@@ -293,7 +283,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun note(msg: String) {
         _ui.value = _ui.value.copy(message = msg, messageIsError = true)
-        _toast.tryEmit(msg)
+        // 系统 Toast：样式和位置由 ROM 决定（vivo 上是白卡+图标，悬浮在底栏上方）
+        Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
     }
 
     /**

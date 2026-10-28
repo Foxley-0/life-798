@@ -77,8 +77,6 @@ import top.yukonga.miuix.kmp.basic.FloatingNavigationBarItem
 import top.yukonga.miuix.kmp.basic.FloatingToolbarDefaults
 import top.yukonga.miuix.kmp.basic.NavigationBar
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
-import top.yukonga.miuix.kmp.basic.SnackbarHost
-import top.yukonga.miuix.kmp.basic.SnackbarHostState
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -285,15 +283,7 @@ private fun MiniApp(
 
     // OverlayDialog 必须在 Scaffold 的 content 内部：LocalPopupStates 由 Scaffold
     // 提供且只包住 content lambda，放在外面读不到，popup 会被直接丢弃。
-    // 扫码失败等临时提示走 Snackbar：底部深色圆角条，4 秒自动消失，
-    // 连续调用会排队（showSnackbar 是 suspend），不会叠成一坨
-    val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(Unit) {
-        vm.toast.collect { snackbarHostState.showSnackbar(it) }
-    }
-
     Scaffold(
-        snackbarHost = { SnackbarHost(state = snackbarHostState) },
         containerColor = MiuixTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { _ ->
