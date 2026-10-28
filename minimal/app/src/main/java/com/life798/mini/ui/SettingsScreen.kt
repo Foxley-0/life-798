@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -43,7 +44,6 @@ fun SettingsScreen(
     state: UiState,
     bottomInset: Dp,
     onOpenAppearance: () -> Unit,
-    onOpenLog: () -> Unit,
     onOpenAbout: () -> Unit,
     onLogout: () -> Unit
 ) {
@@ -90,11 +90,6 @@ fun SettingsScreen(
                         onClick = onOpenAppearance
                     )
                     ArrowPreference(
-                        title = "运行日志",
-                        summary = "查看与导出本次运行记录",
-                        onClick = onOpenLog
-                    )
-                    ArrowPreference(
                         title = "关于",
                         summary = "版本信息与开源许可",
                         onClick = onOpenAbout
@@ -133,6 +128,11 @@ fun SettingsScreen(
                             showLogoutConfirm = false
                             onLogout()
                         },
+                        // 破坏性操作：红底白字（miuix 没有 danger 变体，手动传）
+                        colors = ButtonDefaults.buttonColors(
+                            color = MiuixTheme.colorScheme.error,
+                            contentColor = Color.White
+                        ),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("确定")

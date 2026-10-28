@@ -17,6 +17,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -106,6 +107,8 @@ fun StartScreen(
             Button(
                 onClick = onStart,
                 enabled = !state.busy && state.deviceId.isNotBlank(),
+                // 默认 buttonColors() 是 secondaryVariant（浅灰），会和 #F2F3F5 背景糊在一起
+                colors = ButtonDefaults.buttonColorsPrimary(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)

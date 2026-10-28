@@ -69,8 +69,7 @@ private const val REPO_URL = "https://github.com/Foxley-0/life-798"
  */
 @Composable
 fun AboutScreen(
-    onBack: () -> Unit,
-    onOpenLog: () -> Unit
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
@@ -115,11 +114,6 @@ fun AboutScreen(
             ) {
                 item {
                     Card(modifier = Modifier.fillMaxWidth()) {
-                        ArrowPreference(
-                            title = "运行日志",
-                            summary = "查看与导出本次运行记录",
-                            onClick = onOpenLog
-                        )
                         ArrowPreference(
                             title = "项目仓库",
                             endActions = {

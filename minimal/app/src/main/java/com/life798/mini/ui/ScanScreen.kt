@@ -57,6 +57,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.life798.mini.core.AppLog
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -332,6 +333,7 @@ fun ScanScreen(
                     } else {
                         Button(
                             onClick = { startScan() },
+                            colors = ButtonDefaults.buttonColorsPrimary(),
                             modifier = Modifier.height(52.dp)
                         ) {
                             Text("点击启动扫描", fontSize = 16.sp)

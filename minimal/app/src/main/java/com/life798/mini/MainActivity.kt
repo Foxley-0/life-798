@@ -54,7 +54,6 @@ import com.life798.mini.core.UiPrefs
 import com.life798.mini.ui.AboutScreen
 import com.life798.mini.ui.AppViewModel
 import com.life798.mini.ui.AppearanceScreen
-import com.life798.mini.ui.LogScreen
 import com.life798.mini.ui.LoginScreen
 import com.life798.mini.ui.MiniTheme
 import com.life798.mini.ui.components.LocalBarBlurBackdrop
@@ -71,6 +70,7 @@ import com.life798.mini.ui.components.BarBlurHost
 import com.life798.mini.ui.components.barBlurBackground
 import com.life798.mini.ui.isDarkTheme
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBar
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBarItem
@@ -93,7 +93,7 @@ private enum class Tab { SCAN, SETTINGS }
  *
  * 返回键只做一件事：出栈。所有页面都不再自己挂 BackHandler。
  */
-private enum class Route { TABS, START, LOG, ABOUT, THEME }
+private enum class Route { TABS, START, ABOUT, THEME }
 
 private val RouteStackSaver = listSaver<List<String>, String>(
     save = { it },
@@ -329,6 +329,7 @@ private fun MiniApp(
                             confirmExitStart = false
                             pop()
                         },
+                        colors = ButtonDefaults.buttonColorsPrimary(),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("确定")
@@ -528,11 +529,8 @@ private fun MainContent(
                 onStart = vm::startDevice
             )
 
-            Route.LOG.name -> LogScreen(onBack = onBack)
-
             Route.ABOUT.name -> AboutScreen(
                 onBack = onBack,
-                onOpenLog = { onPush(Route.LOG) }
             )
 
             Route.THEME.name -> AppearanceScreen(
@@ -591,7 +589,6 @@ private fun MainContent(
                                 state = state,
                                 bottomInset = bottomInset,
                                 onOpenAppearance = { onPush(Route.THEME) },
-                                onOpenLog = { onPush(Route.LOG) },
                                 onOpenAbout = { onPush(Route.ABOUT) },
                                 onLogout = vm::logout
                             )
