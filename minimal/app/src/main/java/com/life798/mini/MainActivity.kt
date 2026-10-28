@@ -56,6 +56,9 @@ import com.life798.mini.ui.AppearanceScreen
 import com.life798.mini.ui.LogScreen
 import com.life798.mini.ui.LoginScreen
 import com.life798.mini.ui.MiniTheme
+import com.life798.mini.ui.components.LocalBarBlurBackdrop
+import com.life798.mini.ui.components.liquid.IosLiquidGlassNavigationBar
+import top.yukonga.miuix.kmp.basic.NavigationItem
 import com.life798.mini.ui.ScanScreen
 import com.life798.mini.ui.SettingsScreen
 import com.life798.mini.ui.StartScreen
@@ -446,25 +449,20 @@ private fun BottomBar(
     style: Int
 ) {
     if (style == UiPrefs.BOTTOM_BAR_PILL) {
-        FloatingNavigationBar(
-            modifier = Modifier
-                .barBlurBackground(RoundedCornerShape(FloatingToolbarDefaults.CornerRadius))
-                .zIndex(2f),
-            color = Color.Transparent
-        ) {
-            FloatingNavigationBarItem(
-                selected = tab == Tab.SCAN.name,
-                onClick = { onTabChange(Tab.SCAN.name) },
-                icon = MiuixIcons.Scan,
-                label = "扫描"
-            )
-            FloatingNavigationBarItem(
-                selected = tab == Tab.SETTINGS.name,
-                onClick = { onTabChange(Tab.SETTINGS.name) },
-                icon = MiuixIcons.Settings,
-                label = "设置"
-            )
-        }
+        // 液态玻璃底栏（照搬 SonyPods）：采样 BarBlurHost 提供的 backdrop，
+        // backdrop 为 null 时组件内部自动退化成普通胶囊
+        IosLiquidGlassNavigationBar(
+            items = listOf(
+                NavigationItem("扫描", MiuixIcons.Scan),
+                NavigationItem("设置", MiuixIcons.Settings),
+            ),
+            selectedIndex = if (tab == Tab.SCAN.name) 0 else 1,
+            onItemClick = {
+                onTabChange(if (it == 0) Tab.SCAN.name else Tab.SETTINGS.name)
+            },
+            backdrop = LocalBarBlurBackdrop.current,
+            modifier = Modifier.zIndex(2f)
+        )
     } else {
         NavigationBar(
             modifier = Modifier.barBlurBackground(RectangleShape),

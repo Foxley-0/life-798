@@ -77,154 +77,133 @@ fun LoginScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background)
+            // 照财小通：极浅灰背景，比输入框浅一档，不用卡片
+            .background(Color(0xFFF8F8F8))
             .statusBarsPadding()
             .navigationBarsPadding()
-            // 键盘弹出时整页可滚，否则短信验证码那一栏会把登录按钮顶出屏幕
             .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 32.dp)
+            .padding(horizontal = 24.dp)
     ) {
-        // MIUI 登录页头部：居中 logo + 加粗标题 + 灰色副标题。
-        // 标题用 onSurface 而不是 primary —— 主色只留给按钮和链接，用两次会互相削弱
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Image(
-                painter = painterResource(R.drawable.ic_logo),
-                contentDescription = null,
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(RoundedCornerShape(18.dp))
-            )
-            Spacer(Modifier.height(20.dp))
-            Text(
-                text = "798 小助手",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MiuixTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "扫码启动用水设备",
-                fontSize = 13.sp,
-                color = MiuixTheme.colorScheme.onSurfaceSecondary
-            )
-        }
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(120.dp))
+
+        // 财小通：超大字标题当视觉重心，不用 logo
+        Text(
+            text = "登录 798 小助手",
+            fontSize = 34.sp,
+            fontWeight = FontWeight.Bold,
+            color = MiuixTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "扫码启动用水设备",
+            fontSize = 15.sp,
+            color = MiuixTheme.colorScheme.onSurfaceSecondary
+        )
+        Spacer(Modifier.height(40.dp))
 
         // 网关没配就直接挡在门口，别让人白试
         if (!state.configured) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = "未配置 API 网关，无法登录。请检查 secrets.properties 或仓库 Secrets。",
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.error
-                )
-            }
+            Text(
+                text = "未配置 API 网关，无法登录。请检查 secrets.properties 或仓库 Secrets。",
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.error
+            )
             Spacer(Modifier.height(16.dp))
         }
 
-        // MIUI 登录页结构：白卡片里是「输入行 + 分隔线」，不是灰色药丸。
-        // TextField 必须设透明背景，否则默认的 secondaryContainer 灰底会盖在白卡上
-        Card(
+        // 药丸输入框：直接落在背景上，没有卡片、没有分隔线
+        TextField(
+            value = phone,
+            onValueChange = { if (it.length <= 11) phone = it.filter(Char::isDigit) },
+            label = "手机号",
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            cornerRadius = 16.dp,
+            colors = TextFieldDefaults.textFieldColors(backgroundColor = Color(0xFFF2F2F2)),
             modifier = Modifier
                 .fillMaxWidth()
-                .shadow(3.dp, RoundedCornerShape(16.dp), clip = false)
-        ) {
+                .height(56.dp)
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
             TextField(
-                value = phone,
-                onValueChange = { if (it.length <= 11) phone = it.filter(Char::isDigit) },
-                label = "手机号",
+                value = graphCode,
+                onValueChange = { if (it.length <= 6) graphCode = it },
+                label = "图形验证码",
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                colors = TextFieldDefaults.textFieldColors(backgroundColor = Color.Transparent),
-                modifier = Modifier.fillMaxWidth()
+                cornerRadius = 16.dp,
+                colors = TextFieldDefaults.textFieldColors(backgroundColor = Color(0xFFF2F2F2)),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(56.dp)
             )
-
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = 16.dp),
-                color = MiuixTheme.colorScheme.dividerLine
-            )
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextField(
-                    value = graphCode,
-                    onValueChange = { if (it.length <= 6) graphCode = it },
-                    label = "图形验证码",
-                    singleLine = true,
-                    colors = TextFieldDefaults.textFieldColors(backgroundColor = Color.Transparent),
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(12.dp))
-                // 图片本身可点刷新，不再单独占一行「换一张」
-                Box(
-                    modifier = Modifier
-                        .size(width = 108.dp, height = 48.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MiuixTheme.colorScheme.secondaryVariant)
-                        .clickable { onRefreshCaptcha() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    when {
-                        state.captchaLoading -> CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp)
-                        )
-
-                        captchaBitmap != null -> Image(
-                            bitmap = captchaBitmap.asImageBitmap(),
-                            contentDescription = "图形验证码，点击刷新",
-                            modifier = Modifier.fillMaxSize()
-                        )
-
-                        else -> Text(
-                            text = if (state.captchaError != null) "加载失败\n点此重试" else "点此加载",
-                            fontSize = 11.sp,
-                            lineHeight = 14.sp,
-                            color = MiuixTheme.colorScheme.primary,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                }
-                Spacer(Modifier.width(16.dp))
-            }
-
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = 16.dp),
-                color = MiuixTheme.colorScheme.dividerLine
-            )
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextField(
-                    value = smsCode,
-                    onValueChange = { if (it.length <= 8) smsCode = it.filter(Char::isDigit) },
-                    label = "短信验证码",
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    colors = TextFieldDefaults.textFieldColors(backgroundColor = Color.Transparent),
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(12.dp))
-                TextButton(
-                    text = if (state.smsCountdown > 0) "${state.smsCountdown}s" else "获取验证码",
-                    onClick = { onSendSms(phone, graphCode) },
-                    enabled = state.smsCountdown == 0 && !state.busy && state.configured,
-                    colors = ButtonDefaults.textButtonColors(
-                        color = Color.Transparent,
-                        textColor = MiuixTheme.colorScheme.primary
+            Spacer(Modifier.width(12.dp))
+            Box(
+                modifier = Modifier
+                    .size(width = 108.dp, height = 56.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFFF2F2F2))
+                    .clickable { onRefreshCaptcha() },
+                contentAlignment = Alignment.Center
+            ) {
+                when {
+                    state.captchaLoading -> CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp)
                     )
-                )
-                Spacer(Modifier.width(8.dp))
+
+                    captchaBitmap != null -> Image(
+                        bitmap = captchaBitmap.asImageBitmap(),
+                        contentDescription = "图形验证码，点击刷新",
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    else -> Text(
+                        text = if (state.captchaError != null) "加载失败\n点此重试" else "点此加载",
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        color = MiuixTheme.colorScheme.primary,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(12.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextField(
+                value = smsCode,
+                onValueChange = { if (it.length <= 8) smsCode = it.filter(Char::isDigit) },
+                label = "短信验证码",
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                cornerRadius = 16.dp,
+                colors = TextFieldDefaults.textFieldColors(backgroundColor = Color(0xFFF2F2F2)),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(56.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            TextButton(
+                text = if (state.smsCountdown > 0) "${state.smsCountdown}s" else "获取验证码",
+                onClick = { onSendSms(phone, graphCode) },
+                enabled = state.smsCountdown == 0 && !state.busy && state.configured,
+                colors = ButtonDefaults.textButtonColors(
+                    color = Color.Transparent,
+                    textColor = MiuixTheme.colorScheme.primary
+                )
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
 
         Button(
             onClick = { onLogin(phone, smsCode) },
             enabled = !state.busy && state.configured,
-            // 默认 buttonColors() 是 secondaryVariant（灰底），必须显式换主色
+            cornerRadius = 26.dp,
             colors = ButtonDefaults.buttonColorsPrimary(),
             modifier = Modifier
                 .fillMaxWidth()

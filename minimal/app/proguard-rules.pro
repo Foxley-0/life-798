@@ -8,17 +8,25 @@
 -keep class com.life798.mini.net.** { *; }
 -keep class com.life798.mini.core.** { *; }
 
-# ZXing：解码器通过工厂 + 反射构造，R8 会误判为无用代码整包裁掉。
-# 不保留的话 release 包扫码会直接 NoClassDefFoundError。
--keep class com.google.zxing.** { *; }
--dontwarn com.google.zxing.**
+# ── ML Kit 条码识别（bundled 版）─────────────────────────────
+# 崩溃实证（release 包登录后 NPE，用 mapping.txt 反混淆得出）：
+#   com.google.android.gms.internal.mlkit_vision_common.zzih
+#   读取 com.google.mlkit.vision.barcode.internal.zzg.a 时为空
+#
+# 这些 internal 类由 native 层和反射访问，R8 看不到引用就会裁字段/改名，
+# 表现为「debug 正常、release 一点就崩」。必须整包保留。
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_common.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_barcode.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_barcode_bundled.** { *; }
+-dontwarn com.google.mlkit.**
+-dontwarn com.google.android.gms.internal.mlkit_**
 
-# zxing-android-embedded：CaptureActivity 由 manifest 引用，
-# 内部还会通过反射构造 View 与解码器，整包保留最稳妥。
--keep class com.journeyapps.** { *; }
--dontwarn com.journeyapps.**
+# ── CameraX ────────────────────────────────────────────────
+# 相机绑定/解绑走生命周期回调与反射，保留避免 release 下偶发 NoSuchMethodError
+-keep class androidx.camera.** { *; }
+-dontwarn androidx.camera.**
 
-# 自定义正方形取景框靠反射替换内部字段，字段名不能被混淆
--keepclassmembers class com.journeyapps.barcodescanner.DecoratedBarcodeView {
-    private com.journeyapps.barcodescanner.ViewfinderView viewFinder;
-}
+# ── 注意 ──────────────────────────────────────────────────
+# 原来这里有一整套 ZXing / zxing-android-embedded 的 keep 规则，
+# 但 v1.1.0 已经把扫码换成 CameraX + ML Kit，那些规则既无用又会误导排查。

@@ -71,7 +71,13 @@ android {
         }
 
         getByName("release") {
-            if (hasCustomSigning) signingConfig = signingConfigs.getByName("custom")
+            // 本地没有 keystore 密码时退回 debug 签名，这样 release 包能装到真机验证；
+            // CI 有 Secrets，hasCustomSigning 为 true，仍然用正式签名
+            signingConfig = if (hasCustomSigning) {
+                signingConfigs.getByName("custom")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
