@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
@@ -82,6 +83,7 @@ fun LoginScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
+            .overScrollVertical()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
     ) {

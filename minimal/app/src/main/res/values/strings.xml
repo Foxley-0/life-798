@@ -2,12 +2,12 @@
     <string name="app_name">798 小助手</string>
 
     <string name="about_tab">关于</string>
-    <string name="about_developer">开发者</string>
-    <string name="about_developer_name">Mercury</string>
-    <string name="about_developer_id">@Mercury000</string>
+    <string name="about_developer">项目仓库</string>
+    <string name="about_developer_name">Foxley-0</string>
+    <string name="about_developer_id">life-798</string>
     <string name="about_source_code">源码</string>
     <string name="about_references">引用</string>
     <string name="source_repository">GitHub</string>
-    <string name="source_code_url">https://github.com/Mercury000/HUEL-yktwx</string>
+    <string name="source_code_url">https://github.com/Foxley-0/life-798</string>
     <string name="link_open_failed">没有可打开链接的应用</string>
 </resources>

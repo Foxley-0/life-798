@@ -1,10 +1,10 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <!-- GlassArtwork uses alpha rather than RGB: keep a white rounded badge,
-         cut out the card, and retain its stripe/barcode/chip as white details. -->
+    <!-- GlassArtwork 用 alpha 作遮罩：纯白 + evenOdd，外框实心、内部图案挖空。
+         图案是二维码：方框 + 三个定位角 + 中间圆点。 -->
     <path
         android:fillColor="#FFFFFFFF"
         android:fillType="evenOdd"
-        android:pathData="M28,2 L80,2 Q106,2 106,28 L106,80 Q106,106 80,106 L28,106 Q2,106 2,80 L2,28 Q2,2 28,2 Z M32,33 L76,33 Q82,33 82,39 L82,67 Q82,73 76,73 L32,73 Q26,73 26,67 L26,39 Q26,33 32,33 Z M26,43 L82,43 L82,51 L26,51 Z M36,57 L39,57 L39,65 L36,65 Z M42,57 L44,57 L44,65 L42,65 Z M47,57 L50,57 L50,65 L47,65 Z M53,57 L55,57 L55,65 L53,65 Z M67,56 A5,5 0,1 1,67,66 A5,5 0,1 1,67,56 Z" />
+        android:pathData="M28,2 L80,2 Q106,2 106,28 L106,80 Q106,106 80,106 L28,106 Q2,106 2,80 L2,28 Q2,2 28,2 Z M30,24 L78,24 Q84,24 84,30 L84,78 Q84,84 78,84 L30,84 Q24,84 24,78 L24,30 Q24,24 30,24 Z M32,28 L44,28 L44,40 L32,40 Z M64,28 L76,28 L76,40 L64,40 Z M32,68 L44,68 L44,80 L32,80 Z M54,48 A6,6 0,1 1 54,60 A6,6 0,1 1 54,48 Z" />
 </vector>

@@ -13,11 +13,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.utils.overScrollVertical
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
+import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
@@ -45,10 +49,13 @@ fun AppearanceScreen(
     onBottomBarStyle: (Int) -> Unit,
     onBack: () -> Unit
 ) {
+    val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+
     Column(modifier = Modifier.fillMaxSize()) {
         // SmallTopAppBar 自带状态栏 inset，外层不要再加 statusBarsPadding
         SmallTopAppBar(
             title = "外观",
+            scrollBehavior = scrollBehavior,
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(
@@ -65,6 +72,8 @@ fun AppearanceScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .overScrollVertical()
+                .nestedScroll(scrollBehavior.nestedScrollConnection)
                 .navigationBarsPadding(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp)
         ) {

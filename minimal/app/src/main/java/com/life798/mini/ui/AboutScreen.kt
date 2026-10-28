@@ -181,22 +181,19 @@ fun AboutPage(
                         },
                 )
                 Spacer(Modifier.height(18.dp))
-                GlassArtwork(
-                    resourceId = R.drawable.about_wordmark,
-                    backdrop = backdrop,
-                    darkMode = darkMode,
-                    blurRadius = 150f,
-                    shape = RoundedCornerShape(16.dp),
-                    contentScale = ContentScale.FillBounds,
-                    modifier = Modifier
-                        .width(224.dp)
-                        .height(64.dp)
-                        .graphicsLayer {
-                            val progress = ((scrollProgress - 0.20f) / 0.15f).coerceIn(0f, 1f)
-                            alpha = 1f - progress
-                            scaleX = 1f - (progress * 0.05f)
-                            scaleY = 1f - (progress * 0.05f)
-                        },
+                // 文字 logo：动画参数与图标完全一致（起点 0.20、跨度 0.15、缩放 5%），
+                // 只是不用玻璃遮罩 —— 文字本身够清晰
+                Text(
+                    text = "798 小助手",
+                    fontSize = 40.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MiuixTheme.colorScheme.onSurface,
+                    modifier = Modifier.graphicsLayer {
+                        val progress = ((scrollProgress - 0.20f) / 0.15f).coerceIn(0f, 1f)
+                        alpha = 1f - progress
+                        scaleX = 1f - (progress * 0.05f)
+                        scaleY = 1f - (progress * 0.05f)
+                    },
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
@@ -337,7 +334,7 @@ private fun DeveloperCard(modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Image(
-                painter = painterResource(R.drawable.about_developer_avatar),
+                painter = painterResource(R.drawable.about_avatar),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -395,6 +392,6 @@ private fun Context.openLink(url: String) {
 }
 
 private const val LOGO_SPACER_KEY = "logoSpacer"
-private const val DEVELOPER_URL = "https://github.com/Mercury000"
+private const val DEVELOPER_URL = "https://github.com/Foxley-0/life-798"
 
 private val HERO_EXTRA_TOP = 40.dp
