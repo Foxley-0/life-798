@@ -1,0 +1,24 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="224dp" android:height="64dp"
+    android:viewportWidth="224" android:viewportHeight="64">
+    <!-- Custom 财小通 lettering: rounded terminals, fuller strokes and optical spacing.
+         White vector strokes retain the existing GlassArtwork alpha mask. -->
+    <group android:translateX="25" android:translateY="6">
+        <path android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF" android:strokeWidth="5"
+            android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M4 33V10Q4 7 8 7H20Q24 7 24 11V33 M14 14V26Q14 38 4 46 M18 35L25 44 M29 16H49 M43 5V43Q43 47 39 46L34 44 M42 18Q37 30 27 37" />
+    </group>
+    <group android:translateX="94" android:translateY="6">
+        <path android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF" android:strokeWidth="5"
+            android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M25 6V43Q25 47 21 46L15 44 M11 18Q9 30 3 38 M37 18Q42 27 47 37" />
+    </group>
+    <group android:translateX="158" android:translateY="6">
+        <path android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF" android:strokeWidth="5"
+            android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M3 7L9 13 M2 23H9V37Q12 43 18 45Q30 48 50 45 M17 7H43L31 15L25 11 M18 38V19H43Q46 19 46 22V37Q46 40 40 38 M19 26H45 M19 32H45 M31 19V39" />
+    </group>
+</vector>

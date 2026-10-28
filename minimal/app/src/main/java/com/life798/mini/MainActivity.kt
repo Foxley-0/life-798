@@ -22,6 +22,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -51,7 +52,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.UiPrefs
-import com.life798.mini.ui.AboutScreen
+import com.life798.mini.ui.AboutPage
 import com.life798.mini.ui.AppViewModel
 import com.life798.mini.ui.AppearanceScreen
 import com.life798.mini.ui.LoginScreen
@@ -529,7 +530,10 @@ private fun MainContent(
                 onStart = vm::startDevice
             )
 
-            Route.ABOUT.name -> AboutScreen(
+            Route.ABOUT.name -> AboutPage(
+                padding = PaddingValues(0.dp),
+                isActive = true,
+                onOpenReferences = { },
                 onBack = onBack,
             )
 

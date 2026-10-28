@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- GlassArtwork uses alpha rather than RGB: keep a white rounded badge,
+         cut out the card, and retain its stripe/barcode/chip as white details. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M28,2 L80,2 Q106,2 106,28 L106,80 Q106,106 80,106 L28,106 Q2,106 2,80 L2,28 Q2,2 28,2 Z M32,33 L76,33 Q82,33 82,39 L82,67 Q82,73 76,73 L32,73 Q26,73 26,67 L26,39 Q26,33 32,33 Z M26,43 L82,43 L82,51 L26,51 Z M36,57 L39,57 L39,65 L36,65 Z M42,57 L44,57 L44,65 L42,65 Z M47,57 L50,57 L50,65 L47,65 Z M53,57 L55,57 L55,65 L53,65 Z M67,56 A5,5 0,1 1,67,66 A5,5 0,1 1,67,56 Z" />
+</vector>

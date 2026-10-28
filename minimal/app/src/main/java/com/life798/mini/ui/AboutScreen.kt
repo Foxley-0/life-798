@@ -1,29 +1,27 @@
 package com.life798.mini.ui
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.border
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -34,240 +32,369 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.life798.mini.BuildConfig
 import com.life798.mini.R
 import com.life798.mini.ui.effect.BgEffectBackground
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.CardDefaults
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
+import top.yukonga.miuix.kmp.blur.BlendColorEntry
+import top.yukonga.miuix.kmp.blur.BlurBlendMode
+import top.yukonga.miuix.kmp.blur.BlurDefaults
+import top.yukonga.miuix.kmp.blur.LayerBackdrop
+import top.yukonga.miuix.kmp.blur.isRuntimeShaderSupported
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.overScrollVertical
 
-private val HERO_HEIGHT = 240.dp
-private val TOP_BAR_HEIGHT = 56.dp
-private const val REPO_URL = "https://github.com/Foxley-0/life-798"
+// ---------------------------------------------------------------------------
+// Structure copied from the miuix example app's AboutPage (example/shared/src/
+// commonMain/kotlin/AboutPage.kt): transparent collapsing top bar, fixed hero
+// (icon / wordmark / version) that fades out element by element, OS3 flowing
+// background, and a first list item anchored to the screen bottom (Spacer +
+// fillParentMaxHeight) so the cards sit at the bottom of the first screen and
+// scroll up as one. Only the artwork (our glass logo mark + wordmark) and the
+// card rows differ from the original.
+// ---------------------------------------------------------------------------
 
-/**
- * 关于页（二级页）。
- *
- * 结构参考 miuix 官方 AboutPage / SonyPods：
- * - HyperOS 流动背景（原来挂在设置页，现在归这里）
- * - 固定 hero：图标 / 名称 / 版本，随滚动依次淡出
- * - 下方卡片：运行日志、项目仓库、开源许可
- */
 @Composable
-fun AboutScreen(
-    onBack: () -> Unit
+fun AboutPage(
+    padding: PaddingValues,
+    isActive: Boolean,
+    onOpenReferences: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    val listState = rememberLazyListState()
-    val heroPx = with(LocalDensity.current) { HERO_HEIGHT.toPx() }
+    val sourceUrl = stringResource(R.string.source_code_url)
+    val density = LocalDensity.current
+    val inspectionMode = LocalInspectionMode.current
+    val topAppBarScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+    val lazyListState = rememberLazyListState()
 
-    val progress by remember(heroPx) {
+    // 0 = resting, 1 = hero scrolled away; normalized over the hero spacer (the
+    // example page's driver).
+    val scrollProgress by remember {
         derivedStateOf {
-            if (listState.firstVisibleItemIndex > 0) {
-                1f
-            } else {
-                (listState.firstVisibleItemScrollOffset / heroPx).coerceIn(0f, 1f)
+            when {
+                lazyListState.firstVisibleItemIndex > 0 -> 1f
+
+                else -> {
+                    val spacer = lazyListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == LOGO_SPACER_KEY }
+                    if (spacer != null && spacer.size > 0) {
+                        (lazyListState.firstVisibleItemScrollOffset.toFloat() / spacer.size).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                }
             }
         }
     }
+    val collapsed by remember { derivedStateOf { scrollProgress == 1f } }
 
-    var showLicenses by remember { mutableStateOf(false) }
+    val darkMode = isSystemInDarkTheme()
+    val surface = MiuixTheme.colorScheme.surface
+    val backdrop = if (isRuntimeShaderSupported()) {
+        rememberLayerBackdrop {
+            drawRect(surface)
+            drawContent()
+        }
+    } else {
+        null
+    }
 
-    // 动效要铺到状态栏下才叫沉浸，所以 inset 只作用在内容上，不作用在背景上
-    val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    // 导航条高度单独算：加在根布局上会把背景也 padding 掉，小白条区域就露系统色
-    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    var heroHeightDp by remember { mutableStateOf(280.dp) }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-    ) {
+    Scaffold(
+        topBar = {
+            SmallTopAppBar(
+                navigationIcon = { onBack?.let { IconButton(onClick = it) { Icon(MiuixIcons.Back, "返回") } } },
+                title = stringResource(R.string.about_tab),
+                scrollBehavior = topAppBarScrollBehavior,
+                color = if (collapsed) surface else Color.Transparent,
+                titleColor = MiuixTheme.colorScheme.onSurface.copy(
+                    alpha = ((scrollProgress - 0.35f) / 0.65f).coerceIn(0f, 1f),
+                ),
+            )
+        },
+    ) { innerPadding ->
+        val contentTopPadding = innerPadding.calculateTopPadding()
+
         BgEffectBackground(
-            dynamicBackground = true,
+            dynamicBackground = isActive && !inspectionMode,
             isFullSize = true,
             modifier = Modifier.fillMaxSize(),
-            alpha = { 1f - progress * 0.55f }
+            bgModifier = if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier,
+            alpha = { 1f - scrollProgress },
         ) {
+            // Fixed hero. Each element fades out in sequence — version first, then
+            // the wordmark, then the icon — exactly like the example page.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = contentTopPadding + HERO_EXTRA_TOP + 52.dp)
+                    .onSizeChanged { size ->
+                        with(density) { heroHeightDp = size.height.toDp() }
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                GlassArtwork(
+                    resourceId = R.drawable.about_logo_mark,
+                    backdrop = backdrop,
+                    darkMode = darkMode,
+                    blurRadius = 200f,
+                    shape = RectangleShape,
+                    modifier = Modifier
+                        .size(88.dp)
+                        .graphicsLayer {
+                            val progress = ((scrollProgress - 0.35f) / 0.15f).coerceIn(0f, 1f)
+                            alpha = 1f - progress
+                            scaleX = 1f - (progress * 0.05f)
+                            scaleY = 1f - (progress * 0.05f)
+                        },
+                )
+                Spacer(Modifier.height(18.dp))
+                GlassArtwork(
+                    resourceId = R.drawable.about_wordmark,
+                    backdrop = backdrop,
+                    darkMode = darkMode,
+                    blurRadius = 150f,
+                    shape = RoundedCornerShape(16.dp),
+                    contentScale = ContentScale.FillBounds,
+                    modifier = Modifier
+                        .width(224.dp)
+                        .height(64.dp)
+                        .graphicsLayer {
+                            val progress = ((scrollProgress - 0.20f) / 0.15f).coerceIn(0f, 1f)
+                            alpha = 1f - progress
+                            scaleX = 1f - (progress * 0.05f)
+                            scaleY = 1f - (progress * 0.05f)
+                        },
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE})",
+                    modifier = Modifier.graphicsLayer {
+                        val progress = ((scrollProgress - 0.05f) / 0.15f).coerceIn(0f, 1f)
+                        alpha = 1f - progress
+                        scaleX = 1f - (progress * 0.05f)
+                        scaleY = 1f - (progress * 0.05f)
+                    },
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    fontSize = 14.sp,
+                )
+            }
+
             LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
+                state = lazyListState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .overScrollVertical()
+                    .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection),
                 contentPadding = PaddingValues(
-                    top = statusBarTop + HERO_HEIGHT + TOP_BAR_HEIGHT,
+                    top = contentTopPadding,
                     start = 16.dp,
                     end = 16.dp,
-                    bottom = 28.dp + navBottom
-                )
+                ),
             ) {
-                item {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        ArrowPreference(
-                            title = "项目仓库",
-                            endActions = {
-                                Text(
-                                    text = "GitHub",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onSurfaceVariantActions
-                                )
-                            },
-                            onClick = { openLink(context, REPO_URL) }
-                        )
-                        ArrowPreference(
-                            title = "开源许可",
-                            summary = "miuix / ZXing / OkHttp",
-                            onClick = { showLicenses = true }
-                        )
-                    }
-
-                    Spacer(Modifier.height(20.dp))
-                    Text(
-                        text = "非官方客户端，与服务提供方无关。\n仅供本人对自己有权使用的设备进行操作。",
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
+                item(key = LOGO_SPACER_KEY) {
+                    // Hero area + the example page's 126dp scroll budget.
+                    Spacer(
+                        Modifier.height(
+                            heroHeightDp + 52.dp + HERO_EXTRA_TOP + 126.dp,
+                        ),
                     )
+                }
+                item(key = "about") {
+                    Box {
+                        Spacer(Modifier.fillParentMaxHeight())
+                        Column(
+                            modifier = Modifier.padding(
+                                bottom = padding.calculateBottomPadding() + 28.dp,
+                            ),
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                SectionTitle(stringResource(R.string.about_developer))
+                                DeveloperCard()
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                ArrowPreference(
+                                    title = stringResource(R.string.about_source_code),
+                                    endActions = {
+                                        Text(
+                                            text = stringResource(R.string.source_repository),
+                                            fontSize = MiuixTheme.textStyles.body2.fontSize,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                                        )
+                                    },
+                                    onClick = { context.openLink(sourceUrl) },
+                                )
+                                ArrowPreference(
+                                    title = stringResource(R.string.about_references),
+                                    onClick = onOpenReferences,
+                                )
+                            }
+                            Spacer(Modifier.height(12.dp))
+                        }
+                    }
                 }
             }
         }
+    }
+}
 
-        // 固定 hero：版本先淡、名称次之、图标最后
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .padding(top = statusBarTop + TOP_BAR_HEIGHT),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Image(
-                painter = painterResource(R.drawable.ic_logo),
-                contentDescription = null,
-                modifier = Modifier
-                    .size(84.dp)
-                    .clip(RoundedCornerShape(22.dp))
-                    .graphicsLayer {
-                        val p = ((progress - 0.35f) / 0.35f).coerceIn(0f, 1f)
-                        alpha = 1f - p
-                        scaleX = 1f - p * 0.06f
-                        scaleY = 1f - p * 0.06f
-                    }
-            )
+/**
+ * Artwork whose pixels are replaced by a frosted sample of the background behind
+ * it (the example app's glass title treatment): the image's alpha acts as the mask
+ * via [BlendMode.DstIn].
+ */
+@Composable
+private fun GlassArtwork(
+    resourceId: Int,
+    backdrop: LayerBackdrop?,
+    darkMode: Boolean,
+    blurRadius: Float,
+    shape: Shape,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Fit,
+) {
+    val blendColors = remember(darkMode) { aboutArtworkBlendColors(darkMode) }
+    val effectModifier = if (backdrop != null) {
+        Modifier.textureBlur(
+            backdrop = backdrop,
+            shape = shape,
+            blurRadius = blurRadius,
+            noiseCoefficient = 0f,
+            colors = BlurDefaults.blurColors(blendColors = blendColors),
+            contentBlendMode = BlendMode.DstIn,
+        )
+    } else {
+        Modifier
+    }
+    Image(
+        painter = painterResource(resourceId),
+        contentDescription = null,
+        contentScale = contentScale,
+        modifier = modifier.then(effectModifier),
+    )
+}
 
-            Spacer(Modifier.height(14.dp))
+private fun aboutArtworkBlendColors(darkMode: Boolean): List<BlendColorEntry> =
+    if (darkMode) {
+        listOf(
+            BlendColorEntry(Color(0xE6A1A1A1), BlurBlendMode.ColorDodge),
+            BlendColorEntry(Color(0x4DE6E6E6), BlurBlendMode.LinearLight),
+            BlendColorEntry(Color(0xFF1AF500), BlurBlendMode.Lab),
+        )
+    } else {
+        listOf(
+            BlendColorEntry(Color(0xCC4A4A4A), BlurBlendMode.ColorBurn),
+            BlendColorEntry(Color(0xFF4F4F4F), BlurBlendMode.LinearLight),
+            BlendColorEntry(Color(0xFF1AF200), BlurBlendMode.Lab),
+        )
+    }
 
-            Text(
-                text = "798 小助手",
-                fontSize = 21.sp,
-                fontWeight = FontWeight.Medium,
-                color = MiuixTheme.colorScheme.onSurface,
-                modifier = Modifier.graphicsLayer {
-                    val p = ((progress - 0.15f) / 0.35f).coerceIn(0f, 1f)
-                    alpha = 1f - p
-                }
-            )
-
-            Spacer(Modifier.height(5.dp))
-
-            Text(
-                text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-                fontSize = 12.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                modifier = Modifier.graphicsLayer {
-                    val p = (progress / 0.3f).coerceIn(0f, 1f)
-                    alpha = 1f - p
-                }
-            )
-        }
-
-        // 顶栏始终在，返回按钮不能跟着 hero 一起消失
+@Composable
+private fun DeveloperCard(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.defaultColors(),
+        onClick = { context.openLink(DEVELOPER_URL) },
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .align(Alignment.TopCenter)
-                .padding(top = statusBarTop)
-                .height(TOP_BAR_HEIGHT)
-                .padding(horizontal = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = MiuixIcons.Back,
-                    contentDescription = "返回",
-                    tint = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(22.dp)
+            Image(
+                painter = painterResource(R.drawable.about_developer_avatar),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .border(2.dp, Color.White.copy(alpha = 0.68f), CircleShape),
+            )
+            Column(modifier = Modifier.padding(start = 14.dp)) {
+                Text(
+                    text = stringResource(R.string.about_developer_name),
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "@" + stringResource(R.string.about_developer_id),
+                    modifier = Modifier.padding(top = 1.dp),
+                    fontSize = 14.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
             }
+            Spacer(Modifier.weight(1f))
             Text(
-                text = "关于",
-                fontSize = 17.sp,
-                color = MiuixTheme.colorScheme.onSurface.copy(
-                    alpha = (progress * 1.4f).coerceIn(0f, 1f)
-                )
+                text = "›",
+                fontSize = 32.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantActions,
             )
         }
-
-        if (showLicenses) {
-        OverlayDialog(
-            show = true,
-            title = "开源许可",
-            summary = null,
-            onDismissRequest = { showLicenses = false }
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                LicenseLine("miuix", "Apache-2.0 · MIUI / HyperOS 设计系统")
-                LicenseLine("ZXing", "Apache-2.0 · 二维码解码")
-                LicenseLine("OkHttp", "Apache-2.0 · 网络请求")
-                LicenseLine("Jetpack Compose", "Apache-2.0 · 声明式 UI")
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "完整许可证文本见各项目仓库。",
-                    fontSize = 11.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                )
-            }
-        }
-    }
     }
 }
 
+/**
+ * Opens a link without letting a missing browser take the app down: with Android 11
+ * package visibility an unresolvable VIEW intent throws instead of doing nothing.
+ */
 @Composable
-private fun LicenseLine(name: String, desc: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 5.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(text = name, fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurface)
-        Text(
-            text = desc,
-            fontSize = 11.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-        )
+private fun SectionTitle(title: String) {
+    SmallTitle(
+        text = title,
+        modifier = Modifier.padding(top = 4.dp),
+        insideMargin = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+    )
+}
+
+private fun Context.openLink(url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(this, R.string.link_open_failed, Toast.LENGTH_SHORT).show()
+    } catch (_: SecurityException) {
+        Toast.makeText(this, R.string.link_open_failed, Toast.LENGTH_SHORT).show()
     }
 }
 
-private fun openLink(context: Context, url: String) {
-    runCatching {
-        context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    }.onFailure {
-        Toast.makeText(context, "没有可用的浏览器", Toast.LENGTH_SHORT).show()
-    }
-}
+private const val LOGO_SPACER_KEY = "logoSpacer"
+private const val DEVELOPER_URL = "https://github.com/Mercury000"
+
+private val HERO_EXTRA_TOP = 40.dp
