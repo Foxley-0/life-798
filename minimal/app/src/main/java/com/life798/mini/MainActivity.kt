@@ -53,6 +53,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.UiPrefs
 import com.life798.mini.ui.AboutPage
+import com.life798.mini.ui.ReferencesScreen
 import com.life798.mini.ui.AppViewModel
 import com.life798.mini.ui.AppearanceScreen
 import com.life798.mini.ui.LoginScreen
@@ -94,7 +95,7 @@ private enum class Tab { SCAN, SETTINGS }
  *
  * 返回键只做一件事：出栈。所有页面都不再自己挂 BackHandler。
  */
-private enum class Route { TABS, START, ABOUT, THEME }
+private enum class Route { TABS, START, ABOUT, THEME, REFERENCES }
 
 private val RouteStackSaver = listSaver<List<String>, String>(
     save = { it },
@@ -533,9 +534,11 @@ private fun MainContent(
             Route.ABOUT.name -> AboutPage(
                 padding = PaddingValues(0.dp),
                 isActive = true,
-                onOpenReferences = { },
+                onOpenReferences = { onPush(Route.REFERENCES) },
                 onBack = onBack,
             )
+
+            Route.REFERENCES.name -> ReferencesScreen(onBack = onBack)
 
             Route.THEME.name -> AppearanceScreen(
                 themeMode = themeMode,
