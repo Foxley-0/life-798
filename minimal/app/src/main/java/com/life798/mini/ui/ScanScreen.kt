@@ -40,6 +40,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -283,7 +284,10 @@ fun ScanScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = { previewView },
-            modifier = Modifier.fillMaxSize()
+            // 原生 View 不参与 Compose 裁剪，不加这个会在 pager 滑动时溢出到相邻页
+            modifier = Modifier
+                .fillMaxSize()
+                .clipToBounds()
         )
 
         AnimatedVisibility(

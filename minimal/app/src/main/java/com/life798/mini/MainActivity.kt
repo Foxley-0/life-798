@@ -41,6 +41,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
@@ -567,25 +568,34 @@ private fun MainContent(
 
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.fillMaxSize()
+                    // AndroidView 默认不裁剪，相机会溢出到相邻页上，看起来像两页重叠
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clipToBounds()
                 ) { page ->
-                    when (page) {
-                        0 -> ScanScreen(
-                            state = state,
-                            onEnter = vm::clearMessage,
-                            onDecoded = vm::onQrDecoded,
-                            onScanned = { onPush(Route.START) },
-                            pauseTick = scanPauseTick
-                        )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clipToBounds()
+                    ) {
+                        when (page) {
+                            0 -> ScanScreen(
+                                state = state,
+                                onEnter = vm::clearMessage,
+                                onDecoded = vm::onQrDecoded,
+                                onScanned = { onPush(Route.START) },
+                                pauseTick = scanPauseTick
+                            )
 
-                        else -> SettingsScreen(
-                            state = state,
-                            bottomInset = bottomInset,
-                            onOpenAppearance = { onPush(Route.THEME) },
-                            onOpenLog = { onPush(Route.LOG) },
-                            onOpenAbout = { onPush(Route.ABOUT) },
-                            onLogout = vm::logout
-                        )
+                            else -> SettingsScreen(
+                                state = state,
+                                bottomInset = bottomInset,
+                                onOpenAppearance = { onPush(Route.THEME) },
+                                onOpenLog = { onPush(Route.LOG) },
+                                onOpenAbout = { onPush(Route.ABOUT) },
+                                onLogout = vm::logout
+                            )
+                        }
                     }
                 }
             }

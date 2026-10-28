@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -89,11 +90,12 @@ fun AboutScreen(
 
     // 动效要铺到状态栏下才叫沉浸，所以 inset 只作用在内容上，不作用在背景上
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    // 导航条高度单独算：加在根布局上会把背景也 padding 掉，小白条区域就露系统色
+    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .navigationBarsPadding()
     ) {
         BgEffectBackground(
             dynamicBackground = true,
@@ -108,7 +110,7 @@ fun AboutScreen(
                     top = statusBarTop + HERO_HEIGHT + TOP_BAR_HEIGHT,
                     start = 16.dp,
                     end = 16.dp,
-                    bottom = 28.dp
+                    bottom = 28.dp + navBottom
                 )
             ) {
                 item {
