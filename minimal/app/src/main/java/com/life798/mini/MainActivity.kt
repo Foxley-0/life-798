@@ -37,9 +37,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -72,6 +74,7 @@ import com.life798.mini.ui.components.BarBackdropContent
 import com.life798.mini.ui.components.BarBlurHost
 import com.life798.mini.ui.components.barBlurBackground
 import com.life798.mini.ui.isDarkTheme
+import kotlinx.coroutines.flow.distinctUntilChanged
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
@@ -587,17 +590,37 @@ private fun MainContent(
                     initialPage = tabIndex(tab)
                 ) { 3 }
 
-                // 滑动 → 同步 tab；离开扫码页时暂停相机，否则相机会在后台一直跑
+                // 闭包里的 tab：LaunchedEffect(pagerState) 不会因为 tab 变化而重启，
+                // 直接读会读到旧值，用 rememberUpdatedState 兜住。
+                val currentTab by rememberUpdatedState(tab)
+
+                // 相机：离开扫码页立刻停，不等滚动停稳，否则这期间扫到码会直接跳走
                 LaunchedEffect(pagerState.currentPage) {
-                    val newTab = tabAt(pagerState.currentPage)
-                    if (tab != newTab) onTabChange(newTab)
                     if (pagerState.currentPage != 0) onPauseScan()
                 }
 
-                // 点底栏 → 滚到对应页（用 currentPage 判断，避免两个 effect 互相触发）
+                // 停稳 → 同步 tab。
+                //
+                // 这里必须用 settledPage 而不是 currentPage：animateScrollToPage 是逐页
+                // 滚的，3 个 tab 时 0→2 一定经过 1，currentPage 会在动画中途变成 1，
+                // 于是 tab 被改写成「用量」，接着 tab→pager 的 effect 重启、把动画拽回
+                // 第 1 页 —— 表现为「点设置弹到用量」。settledPage 只在滚动结束后变，
+                // 中间页不产生事件。
+                LaunchedEffect(pagerState) {
+                    snapshotFlow { pagerState.settledPage }
+                        .distinctUntilChanged()
+                        .collect { page ->
+                            val newTab = tabAt(page)
+                            if (currentTab != newTab) onTabChange(newTab)
+                        }
+                }
+
+                // 点底栏 → 滚到对应页。
+                // 守卫看 targetPage（目的地）而不是 currentPage：动画进行中 currentPage
+                // 还在中间值上，用它会误判成「还没到位」而重复发起滚动。
                 LaunchedEffect(tab) {
                     val target = tabIndex(tab)
-                    if (pagerState.currentPage != target) {
+                    if (pagerState.targetPage != target) {
                         pagerState.animateScrollToPage(target)
                     }
                 }
