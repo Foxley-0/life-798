@@ -17,3 +17,24 @@ data class Session(
     val uid: String,
     val phone: String
 )
+
+/**
+ * 设备运行状态，来自 `/ui/app/dev/status`。
+ *
+ * 服务端用 `data.device.gene.status` 表示出水状态：
+ * 1 = 运行中，99 = 已停止/结算中。注意 `data.device.status` 是设备在线状态，
+ * 和出不出水无关，不能拿来判断。
+ */
+data class DeviceStatus(
+    /** true 表示设备正在出水。 */
+    val running: Boolean,
+    /** 服务端原始状态码，仅用于日志排查。 */
+    val rawStatus: Int,
+    /**
+     * 设备累计出水总量，单位升。
+     *
+     * 注意：这不是实时值，接水过程中不会变，只有结算完成后才跳。
+     * 抓包实测关闭后 3 秒仍是旧值，6 秒才更新。
+     */
+    val outLiters: Double
+)

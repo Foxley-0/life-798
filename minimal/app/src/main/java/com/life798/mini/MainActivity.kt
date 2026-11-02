@@ -67,6 +67,7 @@ import com.life798.mini.ui.StartScreen
 import com.life798.mini.ui.THEME_DARK
 import com.life798.mini.ui.THEME_LIGHT
 import com.life798.mini.ui.UiState
+import com.life798.mini.ui.UsageScreen
 import com.life798.mini.ui.components.BarBackdropContent
 import com.life798.mini.ui.components.BarBlurHost
 import com.life798.mini.ui.components.barBlurBackground
@@ -83,12 +84,31 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.icon.extended.Scan
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-private enum class Tab { SCAN, SETTINGS }
+private enum class Tab { SCAN, USAGE, SETTINGS }
+
+/**
+ * tab 与 Pager 页号的双向映射。
+ *
+ * 之前只有两个 tab，代码里直接写 `if (page == 0) SCAN else SETTINGS`。
+ * 加到三个之后这种二选一写法会让第三个 tab 串位，统一走这里。
+ */
+private fun tabIndex(tab: String): Int = when (tab) {
+    Tab.SCAN.name -> 0
+    Tab.USAGE.name -> 1
+    else -> 2
+}
+
+private fun tabAt(index: Int): String = when (index) {
+    0 -> Tab.SCAN.name
+    1 -> Tab.USAGE.name
+    else -> Tab.SETTINGS.name
+}
 
 /**
  * 路由。TABS 是底部导航的根，其余都是叠在它上面的二级页。
@@ -314,7 +334,13 @@ private fun MiniApp(
             OverlayDialog(
                 show = true,
                 title = "确定返回吗？",
-                summary = "返回后设备编号会被清除，需要重新扫描二维码。",
+                // 设备还在出水时必须说清楚：返回不会停水，只清编号。
+                // 不提示的话用户会以为退出即关闭，水就一直流着。
+                summary = if (state.deviceRunning) {
+                    "设备仍在运行中，返回只会清除设备编号，不会停止出水。"
+                } else {
+                    "返回后设备编号会被清除，需要重新扫描二维码。"
+                },
                 onDismissRequest = { confirmExitStart = false }
             ) {
                 Row(
@@ -458,12 +484,11 @@ private fun BottomBar(
         IosLiquidGlassNavigationBar(
             items = listOf(
                 NavigationItem("扫描", MiuixIcons.Scan),
+                NavigationItem("用量", MiuixIcons.Months),
                 NavigationItem("设置", MiuixIcons.Settings),
             ),
-            selectedIndex = if (tab == Tab.SCAN.name) 0 else 1,
-            onItemClick = {
-                onTabChange(if (it == 0) Tab.SCAN.name else Tab.SETTINGS.name)
-            },
+            selectedIndex = tabIndex(tab),
+            onItemClick = { onTabChange(tabAt(it)) },
             backdrop = LocalBarBlurBackdrop.current,
             modifier = Modifier.zIndex(2f)
         )
@@ -478,6 +503,12 @@ private fun BottomBar(
                 onClick = { onTabChange(Tab.SCAN.name) },
                 icon = MiuixIcons.Scan,
                 label = "扫描"
+            )
+            NavigationBarItem(
+                selected = tab == Tab.USAGE.name,
+                onClick = { onTabChange(Tab.USAGE.name) },
+                icon = MiuixIcons.Months,
+                label = "用量"
             )
             NavigationBarItem(
                 selected = tab == Tab.SETTINGS.name,
@@ -528,7 +559,8 @@ private fun MainContent(
             Route.START.name -> StartScreen(
                 state = state,
                 onBack = onBack,
-                onStart = vm::startDevice
+                onStart = vm::startDevice,
+                onStop = vm::stopDevice
             )
 
             Route.ABOUT.name -> AboutPage(
@@ -552,20 +584,19 @@ private fun MainContent(
 
             else -> {
                 val pagerState = rememberPagerState(
-                    initialPage = if (tab == Tab.SCAN.name) 0 else 1
-                ) { 2 }
+                    initialPage = tabIndex(tab)
+                ) { 3 }
 
                 // 滑动 → 同步 tab；离开扫码页时暂停相机，否则相机会在后台一直跑
                 LaunchedEffect(pagerState.currentPage) {
-                    val newTab =
-                        if (pagerState.currentPage == 0) Tab.SCAN.name else Tab.SETTINGS.name
+                    val newTab = tabAt(pagerState.currentPage)
                     if (tab != newTab) onTabChange(newTab)
                     if (pagerState.currentPage != 0) onPauseScan()
                 }
 
                 // 点底栏 → 滚到对应页（用 currentPage 判断，避免两个 effect 互相触发）
                 LaunchedEffect(tab) {
-                    val target = if (tab == Tab.SCAN.name) 0 else 1
+                    val target = tabIndex(tab)
                     if (pagerState.currentPage != target) {
                         pagerState.animateScrollToPage(target)
                     }
@@ -591,6 +622,8 @@ private fun MainContent(
                                 onScanned = { onPush(Route.START) },
                                 pauseTick = scanPauseTick
                             )
+
+                            1 -> UsageScreen(state = state, bottomInset = bottomInset)
 
                             else -> SettingsScreen(
                                 state = state,

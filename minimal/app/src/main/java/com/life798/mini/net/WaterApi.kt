@@ -3,6 +3,7 @@ package com.life798.mini.net
 import com.life798.mini.BuildConfig
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
+import com.life798.mini.core.DeviceStatus
 import com.life798.mini.core.Session
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -131,6 +132,33 @@ class WaterApi(
         val url = "$base/dev/start?did=${encode(deviceId)}&upgrade=true&ptype=91&rcp=false"
         val req = builder(url).header("Authorization", token).get().build()
         call(req) { Unit }
+    }
+
+    /**
+     * 关闭设备。
+     *
+     * 官方客户端会额外带一个 sign 参数，但服务端对 dev/end 的校验是可选的
+     * （完整版客户端同样只传 did + rcp，仅靠 Authorization 即可通过），
+     * 这里与 [devStart] 保持对称，不引入签名依赖。
+     */
+    suspend fun devEnd(token: String, deviceId: String): ApiResult<Unit> = io {
+        val url = "$base/dev/end?did=${encode(deviceId)}&rcp=false"
+        val req = builder(url).header("Authorization", token).get().build()
+        call(req) { Unit }
+    }
+
+    /** 查询设备是否正在出水，用于进入启动页时同步真实状态。 */
+    suspend fun devStatus(token: String, deviceId: String): ApiResult<DeviceStatus> = io {
+        val url = "$base/ui/app/dev/status?did=${encode(deviceId)}&more=false"
+        val req = builder(url).header("Authorization", token).get().build()
+        call(req) { json ->
+            val gene = json.optJSONObject("data")
+                ?.optJSONObject("device")
+                ?.optJSONObject("gene")
+            val status = gene?.optInt("status", 0) ?: 0
+            val out = gene?.optDouble("out", 0.0) ?: 0.0
+            DeviceStatus(running = status == 1, rawStatus = status, outLiters = out)
+        }
     }
 
     // ---------- 内部工具 ----------
