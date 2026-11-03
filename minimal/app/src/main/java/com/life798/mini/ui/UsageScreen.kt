@@ -24,6 +24,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
@@ -45,7 +46,7 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.ExpandMore
+import top.yukonga.miuix.kmp.icon.extended.ChevronForward
 import top.yukonga.miuix.kmp.icon.extended.ListView
 import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -229,10 +230,14 @@ private fun YearMonthButton(year: Int, month: Int, count: Int, onClick: () -> Un
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(Modifier.width(4.dp))
+            // 库里没有向下的箭头（只有 ExpandMore，18dp 下会渲染成断角方块），
+            // 用 ChevronForward 转 90° 得到同样的视觉
             Icon(
-                imageVector = MiuixIcons.ExpandMore,
+                imageVector = MiuixIcons.ChevronForward,
                 contentDescription = "选择月份",
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier
+                    .size(14.dp)
+                    .rotate(90f),
                 tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
             )
             Spacer(Modifier.weight(1f))
