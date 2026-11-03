@@ -4,29 +4,41 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <!--
-      GlassArtwork 用 alpha 作遮罩：纯白 + evenOdd。
-      结构照财小通：外框实心 → 内框挖空 → 图案实心，
-      三个子路径串在同一条 pathData 里靠 evenOdd 交替填充。
-      图案取自应用图标（ic_launcher_foreground）：一滴水 + 两道涟漪。
+      GlassArtwork 用 alpha 作遮罩：纯白。
+
+      原来这里是「外框实心 → 内框挖空 → 图案实心」三段 evenOdd，
+      实心减挖空之后剩下一圈 14dp 粗的方框 —— 显示在关于页顶部就是
+      图标外面套了个框，多余。现在只留图案本身。
+
+      去掉框之后图案只占中间 40×51，直接显示会显得很小，
+      所以整体放大 1.6 倍填满画布，再上移 3dp 让重心回到正中。
     -->
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="M28,2 L80,2 Q106,2 106,28 L106,80 Q106,106 80,106 L28,106 Q2,106 2,80 L2,28 Q2,2 28,2 Z M36,16 L72,16 Q92,16 92,36 L92,72 Q92,92 72,92 L36,92 Q16,92 16,72 L16,36 Q16,16 36,16 Z M54,32 C54,32 66,46 66,54 A12,12 0 1 1 42,54 C42,46 54,32 54,32 Z" />
+    <group
+        android:pivotX="54"
+        android:pivotY="57"
+        android:scaleX="1.6"
+        android:scaleY="1.6"
+        android:translateY="-3">
 
-    <!-- 涟漪是描边，单独写，不参与 evenOdd -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="4.5"
-        android:strokeLineCap="round"
-        android:pathData="M34,74 Q44,69 54,74 T74,74" />
+        <!-- 一滴水 -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M54,32 C54,32 66,46 66,54 A12,12 0 1 1 42,54 C42,46 54,32 54,32 Z" />
 
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="4.5"
-        android:strokeAlpha="0.45"
-        android:strokeLineCap="round"
-        android:pathData="M38,83 Q46,79 54,83 T70,83" />
+        <!-- 两道涟漪，描边 -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="4.5"
+            android:strokeLineCap="round"
+            android:pathData="M34,74 Q44,69 54,74 T74,74" />
+
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="4.5"
+            android:strokeAlpha="0.45"
+            android:strokeLineCap="round"
+            android:pathData="M38,83 Q46,79 54,83 T70,83" />
+    </group>
 </vector>

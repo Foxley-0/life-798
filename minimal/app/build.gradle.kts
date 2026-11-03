@@ -22,8 +22,8 @@ android {
         applicationId = "com.life798.mini"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.3.6"
+        versionCode = 16
+        versionName = "1.3.7"
 
         buildConfigField("String", "API_GATEWAY", "\"${secret("API_GATEWAY")}\"")
         buildConfigField("String", "APP_SIGN_SALT", "\"${secret("APP_SIGN_SALT")}\"")

@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -145,8 +146,10 @@ fun LoginScreen(
             Spacer(Modifier.width(12.dp))
             Box(
                 modifier = Modifier
-                    .size(width = 108.dp, height = 56.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                    // 宽度跟右边的「获取验证码」按钮一致（124dp），两块右边缘对齐；
+                    // 圆角 16dp 对 56dp 高度来说太圆，图片四角会被切掉一大块，收到 10dp
+                    .size(width = 124.dp, height = 56.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(MiuixTheme.colorScheme.surfaceContainer)
                     .clickable { onRefreshCaptcha() },
                 contentAlignment = Alignment.Center
@@ -159,6 +162,9 @@ fun LoginScreen(
                     captchaBitmap != null -> Image(
                         bitmap = captchaBitmap.asImageBitmap(),
                         contentDescription = "图形验证码，点击刷新",
+                        // Fit 会在上下留出框的底色，看着像图片缩在中间一条；
+                        // Crop 铺满，验证码数字在中间，左右裁掉一点不影响识别
+                        contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
 
@@ -199,9 +205,10 @@ fun LoginScreen(
                 ),
                 // 宽度必须固定。之前是 wrap content：点下去文字从「获取验证码」变「59s」，
                 // 按钮变窄，左边 weight(1f) 的输入框就吃掉空出来的宽度，瞬间撑大一下。
-                // 108dp 跟上面图形验证码框同宽，两块右边缘对齐。
+                // 124dp：5 个汉字 15sp 约 75dp，TextButton 左右内边距各 16dp，
+                // 108dp 时可用宽度只剩 76dp，正好卡在折行边缘（就是「获取验证 / 码」）
                 modifier = Modifier
-                    .width(108.dp)
+                    .width(124.dp)
                     .height(56.dp)
             )
         }

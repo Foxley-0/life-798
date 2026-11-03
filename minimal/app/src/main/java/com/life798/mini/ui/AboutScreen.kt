@@ -32,7 +32,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
@@ -181,19 +183,30 @@ fun AboutPage(
                         },
                 )
                 Spacer(Modifier.height(18.dp))
-                // 文字 logo：动画参数与图标完全一致（起点 0.20、跨度 0.15、缩放 5%），
-                // 只是不用玻璃遮罩 —— 文字本身够清晰
+                // 文字 logo：动画参数与图标完全一致（起点 0.20、跨度 0.15、缩放 5%）。
+                //
+                // 填色用图标同款的紫红渐变：drawContent 画完字形后，
+                // 用 SrcIn 把渐变盖上去 —— SrcIn 只保留目标已有的像素（也就是字形），
+                // 空白处不落色，效果等于「文字被渐变浇铸」。
+                // 比 TextStyle(brush = ...) 稳，不挑 Compose 版本。
                 Text(
                     text = "798 小助手",
                     fontSize = 40.sp,
                     fontWeight = FontWeight.Bold,
-                    color = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier.graphicsLayer {
-                        val progress = ((scrollProgress - 0.20f) / 0.15f).coerceIn(0f, 1f)
-                        alpha = 1f - progress
-                        scaleX = 1f - (progress * 0.05f)
-                        scaleY = 1f - (progress * 0.05f)
-                    },
+                    modifier = Modifier
+                        .graphicsLayer {
+                            val progress = ((scrollProgress - 0.20f) / 0.15f).coerceIn(0f, 1f)
+                            alpha = 1f - progress
+                            scaleX = 1f - (progress * 0.05f)
+                            scaleY = 1f - (progress * 0.05f)
+                        }
+                        .drawWithContent {
+                            drawContent()
+                            drawRect(
+                                brush = Brush.linearGradient(ABOUT_WORDMARK_GRADIENT),
+                                blendMode = BlendMode.SrcIn
+                            )
+                        },
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
@@ -273,6 +286,19 @@ fun AboutPage(
  * it (the example app's glass title treatment): the image's alpha acts as the mask
  * via [BlendMode.DstIn].
  */
+/**
+ * 关于页 wordmark 的渐变，取色自图标主体。
+ *
+ * 深紫红 → 亮紫 → 深紫红，两端同色让左右边缘不会突然断掉。
+ * 图标是玻璃遮罩（采样背景），文字做不到同样的采样（要先把文字位图化），
+ * 用同色系渐变已经能形成呼应。
+ */
+private val ABOUT_WORDMARK_GRADIENT = listOf(
+    Color(0xFF7B2D5E),
+    Color(0xFFB0559A),
+    Color(0xFF8B3A6B),
+)
+
 @Composable
 private fun GlassArtwork(
     resourceId: Int,
