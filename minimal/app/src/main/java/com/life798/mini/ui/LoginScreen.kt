@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,7 +37,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import com.life798.mini.R
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -53,6 +53,14 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/**
+ * 验证码那两行右侧的固定宽度（验证码图 / 获取验证码 共用，保证右边缘对齐）。
+ *
+ * 360dp 屏（内容区 312dp）上：右列 156dp、输入框 148dp，两边基本等宽。
+ * 之前是 180dp，右列占掉一整行的 58%，把输入框压到只剩 124dp。
+ */
+private val CAPTCHA_COLUMN_WIDTH = 156.dp
 
 /**
  * 登录页：手机号 + 图形验证码 + 短信验证码，一屏完成。
@@ -131,6 +139,7 @@ fun LoginScreen(
 
         Spacer(Modifier.height(12.dp))
 
+        // 验证码两行：右边固定 156dp、左边输入框吃剩余、间隙 8dp。
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextField(
                 value = graphCode,
@@ -143,13 +152,12 @@ fun LoginScreen(
                     .weight(1f)
                     .height(56.dp)
             )
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(8.dp))
             Box(
                 modifier = Modifier
-                    // 宽度跟右边的「获取验证码」按钮一致（124dp），两块右边缘对齐；
-                    // 圆角 16dp 对 56dp 高度来说太圆，图片四角会被切掉一大块，收到 10dp
-                    .size(width = 124.dp, height = 56.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .width(CAPTCHA_COLUMN_WIDTH)
+                    .height(56.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(MiuixTheme.colorScheme.surfaceContainer)
                     .clickable { onRefreshCaptcha() },
                 contentAlignment = Alignment.Center
@@ -162,16 +170,16 @@ fun LoginScreen(
                     captchaBitmap != null -> Image(
                         bitmap = captchaBitmap.asImageBitmap(),
                         contentDescription = "图形验证码，点击刷新",
-                        // Fit 会在上下留出框的底色，看着像图片缩在中间一条；
-                        // Crop 铺满，验证码数字在中间，左右裁掉一点不影响识别
+                        // Crop 撑满：不留上下白边。框 156×56 = 2.79，原图约 3.24，
+                        // 左右各裁约 7% —— 数字残缺是 798 原图本身的问题，不再为它让位
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
 
                     else -> Text(
                         text = if (state.captchaError != null) "加载失败\n点此重试" else "点此加载",
-                        fontSize = 11.sp,
-                        lineHeight = 14.sp,
+                        fontSize = 12.sp,
+                        lineHeight = 15.sp,
                         color = MiuixTheme.colorScheme.primary,
                         textAlign = TextAlign.Center
                     )
@@ -194,21 +202,25 @@ fun LoginScreen(
                     .weight(1f)
                     .height(56.dp)
             )
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(8.dp))
+            // 之前是裸蓝字（透明底），夹在白色药丸输入框旁边显得又小又飘。
+            // 字号其实已经是 button 样式的 17sp（和「登 录」同号），不是字小，是没有形状。
+            // 现在给它和输入框同色的圆角底，变成一个正经的白色药丸按钮。
             TextButton(
                 text = if (state.smsCountdown > 0) "${state.smsCountdown}s" else "获取验证码",
                 onClick = { onSendSms(phone, graphCode) },
                 enabled = state.smsCountdown == 0 && !state.busy && state.configured,
+                cornerRadius = 16.dp,
+                // 156dp 减去左右各 8dp 还有 140dp，5 个汉字 17sp 约 85dp，富余很多
+                insideMargin = PaddingValues(horizontal = 8.dp),
                 colors = ButtonDefaults.textButtonColors(
-                    color = Color.Transparent,
-                    textColor = MiuixTheme.colorScheme.primary
+                    color = MiuixTheme.colorScheme.surfaceContainer,
+                    // 倒计时期间只灰字、底色不变，避免整块按钮忽明忽暗
+                    disabledColor = MiuixTheme.colorScheme.surfaceContainer,
+                    textColor = MiuixTheme.colorScheme.primary,
                 ),
-                // 宽度必须固定。之前是 wrap content：点下去文字从「获取验证码」变「59s」，
-                // 按钮变窄，左边 weight(1f) 的输入框就吃掉空出来的宽度，瞬间撑大一下。
-                // 124dp：5 个汉字 15sp 约 75dp，TextButton 左右内边距各 16dp，
-                // 108dp 时可用宽度只剩 76dp，正好卡在折行边缘（就是「获取验证 / 码」）
                 modifier = Modifier
-                    .width(124.dp)
+                    .width(CAPTCHA_COLUMN_WIDTH)
                     .height(56.dp)
             )
         }

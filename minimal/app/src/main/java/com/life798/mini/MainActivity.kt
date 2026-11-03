@@ -71,7 +71,9 @@ import com.life798.mini.ui.UsingScreen
 import com.life798.mini.ui.THEME_DARK
 import com.life798.mini.ui.THEME_LIGHT
 import com.life798.mini.ui.UiState
+import com.life798.mini.ui.UpdateDialog
 import com.life798.mini.ui.UsageScreen
+import com.life798.mini.ui.openLink
 import com.life798.mini.ui.components.BarBackdropContent
 import com.life798.mini.ui.components.BarBlurHost
 import com.life798.mini.ui.components.barBlurBackground
@@ -381,7 +383,6 @@ private fun MiniApp(
                 onBack = { requestBack() },
                 navForward = navForward,
                 scanPauseTick = scanPauseTick,
-                onPauseScan = { scanPauseTick++ },
                 themeMode = themeMode,
                 accentMode = accentMode,
                 bottomBarStyle = bottomBarStyle,
@@ -441,7 +442,6 @@ private fun MainScaffold(
     onBack: () -> Unit,
     navForward: Boolean,
     scanPauseTick: Int,
-    onPauseScan: () -> Unit,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -511,7 +511,6 @@ private fun MainScaffold(
                         onBack = onBack,
                         navForward = navForward,
                         scanPauseTick = scanPauseTick,
-                        onPauseScan = onPauseScan,
                         themeMode = themeMode,
                         accentMode = accentMode,
                         bottomBarStyle = bottomBarStyle,
@@ -595,7 +594,6 @@ private fun MainContent(
     onBack: () -> Unit,
     navForward: Boolean,
     scanPauseTick: Int,
-    onPauseScan: () -> Unit,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -634,6 +632,8 @@ private fun MainContent(
             Route.ABOUT.name -> AboutPage(
                 padding = PaddingValues(0.dp),
                 isActive = true,
+                state = state,
+                onCheckUpdate = { vm.checkUpdate(silent = false) },
                 onOpenReferences = { onPush(Route.REFERENCES) },
                 onBack = onBack,
             )
@@ -651,11 +651,6 @@ private fun MainContent(
             )
 
             else -> {
-                // 相机：离开扫码页立刻停，不等滚动停稳，否则这期间扫到码会直接跳走
-                LaunchedEffect(pagerState.currentPage) {
-                    if (pagerState.currentPage != 0) onPauseScan()
-                }
-
                 HorizontalPager(
                     state = pagerState,
                     // 相邻页提前组合：手指刚拖动时对面那页已经有内容，
@@ -690,7 +685,9 @@ private fun MainContent(
                                     )
                                 },
                                 onResumeUsing = { onPush(Route.USING) },
-                                pauseTick = scanPauseTick
+                                pauseTick = scanPauseTick,
+                                // 只有真正停在第 0 页才开相机；滑到用量/设置立刻解绑
+                                isActive = pagerState.currentPage == 0,
                             )
 
                             1 -> UsageScreen(
@@ -711,6 +708,29 @@ private fun MainContent(
                 }
             }
         }
+    }
+
+    // ---------- 检查更新 ----------
+    // 挂在 AnimatedContent 之后（同级、后画 = 在上层），不要放进 Pager 里，
+    // 否则切页时弹窗会跟着那一页一起滑走。
+    val context = LocalContext.current
+    val updateTarget = state.updateInfo?.takeIf { !state.updateDismissed }
+
+    UpdateDialog(
+        info = updateTarget,
+        preparing = state.updatePreparing,
+        onDownload = vm::downloadUpdate,
+        onLater = vm::dismissUpdate,
+        onSkipVersion = vm::skipUpdateVersion,
+    )
+
+    // 探测到可用地址后打开浏览器。地址是一次性信号，用完立刻清掉，
+    // 否则重组（比如旋转屏幕）会再打开一次。
+    LaunchedEffect(state.updateDownloadUrl) {
+        val url = state.updateDownloadUrl ?: return@LaunchedEffect
+        context.openLink(url)
+        vm.consumeDownloadUrl()
+        vm.dismissUpdate()
     }
 }
 

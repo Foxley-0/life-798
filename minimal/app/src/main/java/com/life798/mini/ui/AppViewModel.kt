@@ -4,12 +4,18 @@ import android.app.Application
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.life798.mini.BuildConfig
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.BillStore
 import com.life798.mini.core.DeviceSession
 import com.life798.mini.core.DeviceSessionStore
 import com.life798.mini.core.Prefs
+import com.life798.mini.core.UiPrefs
+import com.life798.mini.core.UpdateInfo
+import com.life798.mini.core.isNewerVersion
+import com.life798.mini.net.GithubMirror
+import com.life798.mini.net.UpdateApi
 import com.life798.mini.net.WaterApi
 import com.life798.mini.scan.QrParser
 import com.life798.mini.scan.QrResult
@@ -92,7 +98,21 @@ data class UiState(
     /** 配合 [message]：true 表示这是错误提示，界面上用错误色。 */
     val messageIsError: Boolean = false,
     val smsCountdown: Int = 0,
-    val configured: Boolean = true
+    val configured: Boolean = true,
+    /** 正在检查更新，关于页那一行显示「检查中…」。 */
+    val updateChecking: Boolean = false,
+    /** 检查到的新版本；null 表示没有可提示的更新。 */
+    val updateInfo: UpdateInfo? = null,
+    /** 手动检查失败的原因；自动检查失败不写这里（静默）。 */
+    val updateError: String? = null,
+    /** 手动检查完、确认已是最新。 */
+    val updateUpToDate: Boolean = false,
+    /** 用户点了「以后再说」，本次进程不再弹。 */
+    val updateDismissed: Boolean = false,
+    /** 正在探测下载线路，按钮显示「准备中…」。 */
+    val updatePreparing: Boolean = false,
+    /** 探测好的下载地址，界面拿到就打开浏览器并清空。 */
+    val updateDownloadUrl: String? = null
 ) {
     val loggedIn: Boolean get() = token.isNotBlank()
 }
@@ -100,6 +120,7 @@ data class UiState(
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val prefs = Prefs(app)
+    private val uiPrefs = UiPrefs(app)
     private val api = WaterApi()
     private val billStore = BillStore(app)
 
@@ -115,7 +136,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private var smsTimer: Job? = null
 
+    private val updateApi = UpdateApi()
+    private var updateJob: Job? = null
+
     init {
+        // 启动自动检查更新：单独一条协程，失败完全静默，不影响任何主流程。
+        // 延迟 1.5 秒是为了等首屏渲染完，别跟登录校验、账单同步抢带宽。
+        viewModelScope.launch {
+            delay(1500)
+            checkUpdate(silent = true)
+        }
+
         viewModelScope.launch {
             val token = prefs.token.first()
             val phone = prefs.phone.first()
@@ -673,5 +704,104 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         super.onCleared()
         smsTimer?.cancel()
+        updateJob?.cancel()
+    }
+
+    // ---------------- 检查更新 ----------------
+
+    /**
+     * 检查 GitHub 有没有新版本。
+     *
+     * @param silent true  = 启动时自动检查：失败不提示，只是不弹窗；
+     *               false = 用户主动点「检查更新」：失败要明确告诉他为什么。
+     */
+    fun checkUpdate(silent: Boolean) {
+        updateJob?.cancel()
+        updateJob = viewModelScope.launch {
+            _ui.value = _ui.value.copy(
+                updateChecking = true,
+                updateError = null,
+                updateUpToDate = false,
+            )
+            val result = updateApi.latest()
+            _ui.value = when {
+                // 有新版本 → 交给弹窗；但用户选过「不再提醒此版本」的就不再弹
+                result is ApiResult.Ok &&
+                    isNewerVersion(result.data.version, BuildConfig.VERSION_NAME) -> {
+                    val skipped = uiPrefs.skippedUpdateVersion == result.data.version
+                    AppLog.i(
+                        "Update",
+                        "发现新版本 ${result.data.version}（当前 ${BuildConfig.VERSION_NAME}）" +
+                            if (skipped) "，已被用户跳过" else ""
+                    )
+                    _ui.value.copy(
+                        updateChecking = false,
+                        updateInfo = if (skipped) null else result.data,
+                        // 重新检查到新版本时把「以后再说」的开关复位，
+                        // 否则用户上次关掉之后，再点检查就永远不弹了
+                        updateDismissed = false,
+                        updateError = null,
+                    )
+                }
+
+                // 已是最新
+                result is ApiResult.Ok -> {
+                    AppLog.i("Update", "已是最新 ${BuildConfig.VERSION_NAME}")
+                    _ui.value.copy(
+                        updateChecking = false,
+                        updateInfo = null,
+                        updateUpToDate = !silent,
+                        updateError = null,
+                    )
+                }
+
+                // 失败
+                else -> {
+                    val msg = (result as ApiResult.Err).message
+                    if (silent) {
+                        AppLog.i("Update", "自动检查失败（静默）：$msg")
+                        _ui.value.copy(updateChecking = false)
+                    } else {
+                        _ui.value.copy(updateChecking = false, updateError = msg)
+                    }
+                }
+            }
+        }
+    }
+
+    /** 「以后再说」：只关这一次，下次启动还会提醒。 */
+    fun dismissUpdate() {
+        _ui.value = _ui.value.copy(updateDismissed = true)
+    }
+
+    /** 「不再提醒此版本」：写进 UiPrefs，这个版本号以后不再弹。 */
+    fun skipUpdateVersion() {
+        val v = _ui.value.updateInfo?.version ?: return
+        uiPrefs.skippedUpdateVersion = v
+        AppLog.i("Update", "已跳过版本 $v")
+        _ui.value = _ui.value.copy(updateDismissed = true)
+    }
+
+    /**
+     * 「去下载」：先探测哪条线路能通，再把地址交给界面打开。
+     *
+     * 探测上限约 5 秒（两个镜像各 2.5 秒）；全挂就退回 release 页面，
+     * 至少让用户能看到发生了什么，而不是一个点了没反应的按钮。
+     */
+    fun downloadUpdate() {
+        val info = _ui.value.updateInfo ?: return
+        if (_ui.value.updatePreparing) return
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(updatePreparing = true)
+            val apk = info.apkUrl
+            val target = if (apk != null) GithubMirror.resolve(apk) ?: info.pageUrl else info.pageUrl
+            AppLog.i("Update", "下载地址: $target")
+            _ui.value = _ui.value.copy(updatePreparing = false, updateDownloadUrl = target)
+        }
+    }
+
+    /** 界面打开链接后调用，把一次性地址清掉，避免重复打开。 */
+    fun consumeDownloadUrl() {
+        _ui.value = _ui.value.copy(updateDownloadUrl = null)
     }
 }

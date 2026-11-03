@@ -65,6 +65,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
@@ -88,7 +89,12 @@ fun ScanScreen(
     /** 有设备正在出水时，浮层上多一个「回到用水界面」的入口 */
     onResumeUsing: () -> Unit = {},
     /** 每次自增表示「上层要求暂停解码」（按返回键时） */
-    pauseTick: Int = 0
+    pauseTick: Int = 0,
+    /**
+     * 本页是否为当前可见页。false 时立刻解绑相机（指示灯灭、不再耗电），
+     * 滑回来会自动重新绑定，不用再点一次「开始扫描」。
+     */
+    isActive: Boolean = true
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -193,7 +199,17 @@ fun ScanScreen(
     }
 
     // 相机绑定：Preview + ImageAnalysis
-    LaunchedEffect(scanning, permissionGranted, lifecycleOwner) {
+    LaunchedEffect(scanning, permissionGranted, lifecycleOwner, isActive) {
+        // 滑到别的页：解绑相机。之前只靠 DisposableEffect 的 onDispose，
+        // 而 Pager 设了 beyondViewportPageCount = 1，第 0 页要到「设置」才被回收，
+        // 于是滑到「用量」相机还在跑 —— 就是「到设置才停」的原因。
+        // 150ms 缓冲：快速来回滑时 effect 会被取消，不会真解绑。
+        if (!isActive) {
+            delay(150)
+            runCatching { cameraProvider?.unbindAll() }
+            AppLog.i("Scan", "离开扫码页，相机已解绑")
+            return@LaunchedEffect
+        }
         if (!scanning || !permissionGranted) return@LaunchedEffect
 
         val provider = awaitCameraProvider(context)

@@ -1,10 +1,5 @@
 package com.life798.mini.ui
 
-import android.content.ActivityNotFoundException
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -132,10 +127,3 @@ private fun SectionTitle(title: String) {
     )
 }
 
-private fun Context.openLink(url: String) {
-    try {
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-    } catch (_: ActivityNotFoundException) {
-        Toast.makeText(this, R.string.link_open_failed, Toast.LENGTH_SHORT).show()
-    }
-}

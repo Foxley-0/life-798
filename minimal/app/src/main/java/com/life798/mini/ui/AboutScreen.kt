@@ -1,10 +1,5 @@
 package com.life798.mini.ui
 
-import android.content.ActivityNotFoundException
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -32,9 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
@@ -91,6 +84,8 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 fun AboutPage(
     padding: PaddingValues,
     isActive: Boolean,
+    state: UiState,
+    onCheckUpdate: () -> Unit,
     onOpenReferences: () -> Unit,
     onBack: (() -> Unit)? = null,
 ) {
@@ -120,6 +115,11 @@ fun AboutPage(
         }
     }
     val collapsed by remember { derivedStateOf { scrollProgress == 1f } }
+
+    // 淡出结束后（alpha 已归零）关掉玻璃效果：textureBlur 每帧要走多级离屏 + RuntimeShader，
+    // 标题区域比图标大，收起来后没必要继续算。用 derivedStateOf 包一层，
+    // 只在 0.5 这个阈值翻转时重组，而不是每帧。
+    val heroGlassEnabled by remember { derivedStateOf { scrollProgress < 0.5f } }
 
     val darkMode = isSystemInDarkTheme()
     val surface = MiuixTheme.colorScheme.surface
@@ -185,14 +185,21 @@ fun AboutPage(
                 Spacer(Modifier.height(18.dp))
                 // 文字 logo：动画参数与图标完全一致（起点 0.20、跨度 0.15、缩放 5%）。
                 //
-                // 填色用图标同款的紫红渐变：drawContent 画完字形后，
-                // 用 SrcIn 把渐变盖上去 —— SrcIn 只保留目标已有的像素（也就是字形），
-                // 空白处不落色，效果等于「文字被渐变浇铸」。
-                // 比 TextStyle(brush = ...) 稳，不挑 Compose 版本。
+                // 填色跟图标走同一套玻璃遮罩：采样身后背景 → 模糊 → 混色，字形 alpha 当
+                // DstIn 遮罩。参数抄自 miuix 官方示例 AboutPage.kt:256-284，它也是图标与标题
+                // 共用 logoBlend —— 只有材质一致，两块才不会被看成「一个玻璃一个塑料贴纸」。
+                //
+                // 之前那版用 drawWithContent + BlendMode.SrcIn 盖实色渐变，两个问题：
+                // 1) 材质不同（不采样、不模糊），跟图标凑不到一起；
+                // 2) linearGradient 默认左上→右下对角，40sp 粗体 7 个字横跨 240dp，
+                //    每个字落在渐变的不同位置，看起来像彩色标签。
+                //
+                // color 必须保留：textureBlur 在 shader 不可用时会自动降级，靠它出字。
                 Text(
                     text = "798 小助手",
                     fontSize = 40.sp,
                     fontWeight = FontWeight.Bold,
+                    color = MiuixTheme.colorScheme.onSurface,
                     modifier = Modifier
                         .graphicsLayer {
                             val progress = ((scrollProgress - 0.20f) / 0.15f).coerceIn(0f, 1f)
@@ -200,13 +207,14 @@ fun AboutPage(
                             scaleX = 1f - (progress * 0.05f)
                             scaleY = 1f - (progress * 0.05f)
                         }
-                        .drawWithContent {
-                            drawContent()
-                            drawRect(
-                                brush = Brush.linearGradient(ABOUT_WORDMARK_GRADIENT),
-                                blendMode = BlendMode.SrcIn
+                        .then(
+                            glassEffectModifier(
+                                backdrop = backdrop,
+                                darkMode = darkMode,
+                                blurRadius = 200f,
+                                enabled = heroGlassEnabled,
                             )
-                        },
+                        ),
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
@@ -271,6 +279,27 @@ fun AboutPage(
                                     title = stringResource(R.string.about_references),
                                     onClick = onOpenReferences,
                                 )
+                                // 检查更新：右侧显示当前状态，点击触发一次手动检查
+                                ArrowPreference(
+                                    title = stringResource(R.string.about_check_update),
+                                    endActions = {
+                                        Text(
+                                            text = when {
+                                                state.updateChecking -> "检查中…"
+                                                state.updateError != null -> "检查失败"
+                                                state.updateUpToDate -> "已是最新"
+                                                else -> BuildConfig.VERSION_NAME
+                                            },
+                                            fontSize = MiuixTheme.textStyles.body2.fontSize,
+                                            color = if (state.updateError != null) {
+                                                MiuixTheme.colorScheme.error
+                                            } else {
+                                                MiuixTheme.colorScheme.onSurfaceVariantActions
+                                            },
+                                        )
+                                    },
+                                    onClick = onCheckUpdate,
+                                )
                             }
                             Spacer(Modifier.height(12.dp))
                         }
@@ -282,22 +311,35 @@ fun AboutPage(
 }
 
 /**
- * Artwork whose pixels are replaced by a frosted sample of the background behind
- * it (the example app's glass title treatment): the image's alpha acts as the mask
- * via [BlendMode.DstIn].
- */
-/**
- * 关于页 wordmark 的渐变，取色自图标主体。
+ * 关于页顶部「玻璃」效果的唯一来源：采样身后背景 → 模糊 → 混色，再用内容自身的 alpha
+ * 做 DstIn 遮罩（所以字形/图形之外不落色）。
  *
- * 深紫红 → 亮紫 → 深紫红，两端同色让左右边缘不会突然断掉。
- * 图标是玻璃遮罩（采样背景），文字做不到同样的采样（要先把文字位图化），
- * 用同色系渐变已经能形成呼应。
+ * 图标和 wordmark 必须共用这一个函数，否则两边参数一漂移就又变成两种材质。
+ * 参数与 miuix 官方示例 AboutPage.kt:256-284 的标题写法一致。
+ *
+ * backdrop 为 null 表示运行时不支持 RuntimeShader，此时返回空 Modifier，
+ * 调用方的 color 参数负责兜底出字。
  */
-private val ABOUT_WORDMARK_GRADIENT = listOf(
-    Color(0xFF7B2D5E),
-    Color(0xFFB0559A),
-    Color(0xFF8B3A6B),
-)
+@Composable
+private fun glassEffectModifier(
+    backdrop: LayerBackdrop?,
+    darkMode: Boolean,
+    blurRadius: Float,
+    shape: Shape = RectangleShape,
+    enabled: Boolean = true,
+): Modifier {
+    if (backdrop == null) return Modifier
+    val blendColors = remember(darkMode) { aboutArtworkBlendColors(darkMode) }
+    return Modifier.textureBlur(
+        backdrop = backdrop,
+        shape = shape,
+        blurRadius = blurRadius,
+        noiseCoefficient = 0f,
+        colors = BlurDefaults.blurColors(blendColors = blendColors),
+        contentBlendMode = BlendMode.DstIn,
+        enabled = enabled,
+    )
+}
 
 @Composable
 private fun GlassArtwork(
@@ -309,24 +351,18 @@ private fun GlassArtwork(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Fit,
 ) {
-    val blendColors = remember(darkMode) { aboutArtworkBlendColors(darkMode) }
-    val effectModifier = if (backdrop != null) {
-        Modifier.textureBlur(
-            backdrop = backdrop,
-            shape = shape,
-            blurRadius = blurRadius,
-            noiseCoefficient = 0f,
-            colors = BlurDefaults.blurColors(blendColors = blendColors),
-            contentBlendMode = BlendMode.DstIn,
-        )
-    } else {
-        Modifier
-    }
     Image(
         painter = painterResource(resourceId),
         contentDescription = null,
         contentScale = contentScale,
-        modifier = modifier.then(effectModifier),
+        modifier = modifier.then(
+            glassEffectModifier(
+                backdrop = backdrop,
+                darkMode = darkMode,
+                blurRadius = blurRadius,
+                shape = shape,
+            )
+        ),
     )
 }
 
@@ -403,18 +439,6 @@ private fun SectionTitle(title: String) {
         modifier = Modifier.padding(top = 4.dp),
         insideMargin = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
     )
-}
-
-private fun Context.openLink(url: String) {
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    try {
-        startActivity(intent)
-    } catch (_: ActivityNotFoundException) {
-        Toast.makeText(this, R.string.link_open_failed, Toast.LENGTH_SHORT).show()
-    } catch (_: SecurityException) {
-        Toast.makeText(this, R.string.link_open_failed, Toast.LENGTH_SHORT).show()
-    }
 }
 
 private const val LOGO_SPACER_KEY = "logoSpacer"
