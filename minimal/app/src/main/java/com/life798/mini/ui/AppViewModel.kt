@@ -31,13 +31,14 @@ import kotlin.random.Random
 private const val BILL_SETTLE_DELAY_MS = 8000L
 
 /**
- * 启动成功后、读 `gene.time` 之前的等待。
+ * 启动成功后补 `gene.time`（会话身份证）的节奏。
  *
- * `dev/start` 只是把指令下发下去，设备真正转成 `status=1` 有几百毫秒延迟。
- * 立刻查会拿到 `status=99` 且 `time` 字段缺失，会话就失去了身份证 ——
- * 之后冷启动对账只能靠「还在出水」这一条弱条件判断。
+ * `dev/start` 只是把指令下发下去，设备转成 `status=1` 有延迟，`time` 字段要等它出现。
+ * 实测 1.2 秒时还查不到，所以隔 800ms 再试，最多 6 次（约 5 秒）。
+ * 记录本身在启动成功那一刻就已经落盘，这里只是补一个更精确的判定依据。
  */
-private const val SESSION_FINGERPRINT_DELAY_MS = 1200L
+private const val SESSION_FINGERPRINT_INTERVAL_MS = 800L
+private const val SESSION_FINGERPRINT_ATTEMPTS = 6
 
 data class UiState(
     val ready: Boolean = false,
@@ -380,24 +381,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _ui.value = _ui.value.copy(busy = true, message = null, closed = false)
             when (val r = api.devStart(s.token, s.deviceId)) {
                 is ApiResult.Ok -> {
-                    // 等一下再读 gene.time：dev/start 返回时设备往往还没真正出水，
-                    // 立刻查会拿到 status=99 且没有 time，会话就失去了身份证。
-                    delay(SESSION_FINGERPRINT_DELAY_MS)
-                    // 读不到也不阻塞流程：sessionTime 为空时，对账只看出水状态。
-                    val status = api.devStatus(s.token, s.deviceId)
-                    val sessionTime = if (status is ApiResult.Ok) status.data.sessionTime else null
-                    val session = DeviceSession(
+                    var session = DeviceSession(
                         deviceId = s.deviceId,
                         deviceName = s.deviceName.takeIf { it.isNotBlank() },
                         startedAt = System.currentTimeMillis(),
-                        sessionTime = sessionTime
+                        sessionTime = null
                     )
-                    // commit() 同步落盘：用户可能马上就杀进程，这条记录不能丢
+                    // 先落盘再补身份证：用户可能启动完立刻杀进程，这条记录不能等
                     sessionStore.save(session)
-                    AppLog.i(
-                        "Device",
-                        "启动成功 did=${s.deviceId} time=${sessionTime ?: "(未取到)"}"
-                    )
+                    AppLog.i("Device", "启动成功 did=${s.deviceId}")
                     _ui.value = _ui.value.copy(
                         busy = false,
                         session = session,
@@ -405,6 +397,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         message = null,
                         messageIsError = false
                     )
+
+                    // 补 gene.time：拿到就更新记录，拿不到就维持「只看是否出水」的弱判定
+                    for (attempt in 1..SESSION_FINGERPRINT_ATTEMPTS) {
+                        delay(SESSION_FINGERPRINT_INTERVAL_MS)
+                        val status = api.devStatus(s.token, s.deviceId)
+                        val time = if (status is ApiResult.Ok) status.data.sessionTime else null
+                        if (time != null) {
+                            session = session.copy(sessionTime = time)
+                            sessionStore.save(session)
+                            AppLog.i("Device", "会话身份证 #$attempt time=$time")
+                            // 期间用户可能已经关水，那就别再往回写
+                            val cur = _ui.value
+                            if (cur.session?.deviceId == session.deviceId) {
+                                _ui.value = cur.copy(session = session)
+                            }
+                            break
+                        }
+                    }
                 }
 
                 is ApiResult.Err -> {
