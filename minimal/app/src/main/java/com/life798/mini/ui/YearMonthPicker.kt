@@ -138,8 +138,8 @@ private fun WheelColumn(
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = label,
-            fontSize = 11.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+            fontSize = 13.sp,
+            color = MiuixTheme.colorScheme.onSurfaceSecondary
         )
         Spacer(Modifier.height(2.dp))
         content()

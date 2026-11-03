@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -163,7 +162,7 @@ fun UsingScreen(
                     // 默认 buttonColors() 是浅灰，会和背景糊在一起。
                     colors = ButtonDefaults.buttonColors(
                         color = MiuixTheme.colorScheme.error,
-                        contentColor = Color.White
+                        contentColor = MiuixTheme.colorScheme.onError
                     ),
                     modifier = Modifier
                         .fillMaxWidth()

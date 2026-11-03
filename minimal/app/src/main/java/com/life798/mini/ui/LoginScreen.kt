@@ -78,8 +78,8 @@ fun LoginScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            // 照财小通：极浅灰背景，比输入框浅一档，不用卡片
-            .background(Color(0xFFF8F8F8))
+            // 背景交给 miuix 的 background：浅色 #F2F3F5、暗色 #121212 自动切换。
+            // 之前写死 #F8F8F8，暗色模式下会变成白底白字，整页看不见。
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
@@ -122,7 +122,7 @@ fun LoginScreen(
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
             cornerRadius = 16.dp,
-            colors = TextFieldDefaults.textFieldColors(backgroundColor = Color(0xFFF2F2F2)),
+            colors = TextFieldDefaults.textFieldColors(backgroundColor = MiuixTheme.colorScheme.surfaceContainer),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)
@@ -137,7 +137,7 @@ fun LoginScreen(
                 label = "图形验证码",
                 singleLine = true,
                 cornerRadius = 16.dp,
-                colors = TextFieldDefaults.textFieldColors(backgroundColor = Color(0xFFF2F2F2)),
+                colors = TextFieldDefaults.textFieldColors(backgroundColor = MiuixTheme.colorScheme.surfaceContainer),
                 modifier = Modifier
                     .weight(1f)
                     .height(56.dp)
@@ -147,7 +147,7 @@ fun LoginScreen(
                 modifier = Modifier
                     .size(width = 108.dp, height = 56.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFFF2F2F2))
+                    .background(MiuixTheme.colorScheme.surfaceContainer)
                     .clickable { onRefreshCaptcha() },
                 contentAlignment = Alignment.Center
             ) {
@@ -183,7 +183,7 @@ fun LoginScreen(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 cornerRadius = 16.dp,
-                colors = TextFieldDefaults.textFieldColors(backgroundColor = Color(0xFFF2F2F2)),
+                colors = TextFieldDefaults.textFieldColors(backgroundColor = MiuixTheme.colorScheme.surfaceContainer),
                 modifier = Modifier
                     .weight(1f)
                     .height(56.dp)

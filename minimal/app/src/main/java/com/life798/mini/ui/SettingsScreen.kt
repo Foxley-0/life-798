@@ -131,10 +131,11 @@ fun SettingsScreen(
                             showLogoutConfirm = false
                             onLogout()
                         },
-                        // 破坏性操作：红底白字（miuix 没有 danger 变体，手动传）
+                        // 破坏性操作：红底。文字色用 onError 而不是写死白色 ——
+                        // Monet 取色下 error 可能变浅，白字会糊掉
                         colors = ButtonDefaults.buttonColors(
                             color = MiuixTheme.colorScheme.error,
-                            contentColor = Color.White
+                            contentColor = MiuixTheme.colorScheme.onError
                         ),
                         modifier = Modifier.weight(1f)
                     ) {

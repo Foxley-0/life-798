@@ -74,8 +74,10 @@ internal fun WheelPicker(
     modifier: Modifier = Modifier,
     label: (Int) -> String,
     visibleItemCount: Int = 5,
-    selectedColor: Color = MiuixTheme.colorScheme.onSurface,
-    unselectedColor: Color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+    // 选中项用主色 —— MIUI 的选择器就是蓝字，之前用 onSurface（纯黑）看着不像系统控件
+    selectedColor: Color = MiuixTheme.colorScheme.primary,
+    // 未选中项用 onSurfaceSecondary 而不是 VariantSummary：后者太淡，叠上 alpha 渐变后几乎看不见
+    unselectedColor: Color = MiuixTheme.colorScheme.onSurfaceSecondary,
     textStyle: TextStyle = MiuixTheme.textStyles.title1,
     itemHeight: Dp = 44.dp
 ) {
