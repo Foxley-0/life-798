@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.random.Random
 
 /**
@@ -29,6 +30,15 @@ import kotlin.random.Random
  * 这样用户关完水切到「用量」页就能看到这一笔，不用手动下拉。
  */
 private const val BILL_SETTLE_DELAY_MS = 8000L
+
+/**
+ * 冷启动校验 token 的超时。
+ *
+ * 校验本身只是一次 `GET /acc/view-info`，正常几百毫秒。
+ * 但网络差的时候不能让用户盯着加载页等，超时就按「已登录」放行 ——
+ * 宁可后面某个请求失败再处理，也不能因为没网把人挡在门外。
+ */
+private const val AUTH_CHECK_TIMEOUT_MS = 3000L
 
 /**
  * 启动成功后补 `gene.time`（会话身份证）的节奏。
@@ -109,17 +119,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val token = prefs.token.first()
             val phone = prefs.phone.first()
-            // 设备编号平时不落盘，只有「正在用水」这一次例外，见 restoreSession
-            _ui.value = _ui.value.copy(
-                ready = true,
-                token = token,
-                phone = phone
-            )
-            // 未登录才需要图形验证码；已登录直接进首页，不必白跑一次请求。
+
             if (token.isBlank()) {
+                _ui.value = _ui.value.copy(ready = true, phone = phone)
                 refreshCaptcha()
-            } else {
-                restoreSession(token)
+                return@launch
+            }
+
+            // 带着上次的 token 进来：先确认它还有效，再放行。
+            //
+            // 之前是直接 ready = true 进首页，然后靠各个请求自己撞 401 ——
+            // 结果是用户先看到首页，再被「同步失败」之类的错误陆续踢出来，
+            // 期间还在用已经失效的身份发请求。
+            // 这里 ready 先留 false（LOADING），校验完再放行，首页不会闪一下。
+            _ui.value = _ui.value.copy(phone = phone, token = token, ready = false)
+            val result = withTimeoutOrNull(AUTH_CHECK_TIMEOUT_MS) { api.viewInfo(token) }
+            when {
+                result is ApiResult.Ok -> {
+                    AppLog.i("Auth", "冷启动校验通过 uid=${result.data}")
+                    _ui.value = _ui.value.copy(ready = true)
+                    restoreSession(token)
+                }
+
+                result is ApiResult.Err && result.code == -99 -> {
+                    AppLog.w("Auth", "冷启动校验：凭证已失效，清除")
+                    // logout 会把 ready 置回 true 并刷新验证码
+                    logout()
+                }
+
+                else -> {
+                    // 超时或网络失败：不能因为没网就把人挡在门外，
+                    // 按已登录放行，真过期了下一个请求会走 handleAuthError
+                    AppLog.w("Auth", "冷启动校验未完成，按已登录放行")
+                    _ui.value = _ui.value.copy(ready = true)
+                    restoreSession(token)
+                }
             }
         }
     }
@@ -233,6 +267,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 统一的鉴权失败出口。服务端用 `-99` / `-21` 表示登录态失效。
+     *
+     * 之前只有启动/关闭设备两处处理了它，账单同步、账单详情、设备名、
+     * 冷启动对账全漏了 —— 表现为 token 过期后页面一直挂着「同步失败」，
+     * 凭证不清、页面也不跳，用户只能自己去设置里退出登录。
+     */
+    private fun handleAuthError(code: Int): Boolean {
+        // -99：登录态整体失效
+        // -21：设备控制需要单独的登录信息，服务端在设备侧再校验一次，同样是重登才能恢复
+        if (code != -99 && code != -21) return false
+        AppLog.w("Auth", "登录态失效 code=$code，清除凭证并回登录页")
+        logout()
+        return true
+    }
+
     fun logout() {
         viewModelScope.launch {
             prefs.clearSession()
@@ -240,6 +290,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             sessionStore.clear()
             // 设备号也要清：否则重新登录后可能对着上一台设备直接点启动
             _ui.value = _ui.value.copy(
+                // 冷启动校验失败时是从 ready=false 进来的，这里必须置回 true，
+                // 否则会一直卡在加载页
+                ready = true,
                 token = "",
                 deviceId = "",
                 deviceName = "",
@@ -275,6 +328,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             when (val list = api.billList(token, page = 0)) {
                 is ApiResult.Err -> {
                     AppLog.w("Bill", "账单列表同步失败: ${list.message}")
+                    // 鉴权失效：清凭证回登录页。留一条「同步失败」只会误导用户
+                    if (handleAuthError(list.code)) {
+                        _ui.value = _ui.value.copy(billsSyncing = false)
+                        return@launch
+                    }
                     _ui.value = _ui.value.copy(billsSyncing = false, billsError = list.message)
                     return@launch
                 }
@@ -295,6 +353,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                                 }
                             }
                             is ApiResult.Err -> {
+                                // 鉴权失效：后面每一条都会失败，跳出循环别再刷请求
+                                if (handleAuthError(detail.code)) break
                                 failed++
                                 AppLog.w("Bill", "详情失败 id=$id: ${detail.message}")
                             }
@@ -425,7 +485,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         message = r.message,
                         messageIsError = true
                     )
-                    if (r.code == -99) logout()
+                    handleAuthError(r.code)
                 }
             }
         }
@@ -471,7 +531,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         message = r.message,
                         messageIsError = true
                     )
-                    if (r.code == -99) logout()
+                    handleAuthError(r.code)
                 }
             }
         }
@@ -502,7 +562,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                is ApiResult.Err -> AppLog.w("Device", "设备名获取失败: ${r.message}")
+                is ApiResult.Err -> {
+                    AppLog.w("Device", "设备名获取失败: ${r.message}")
+                    handleAuthError(r.code)
+                }
             }
         }
     }
@@ -553,8 +616,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                // 网络失败不销毁记录：下次启动还有机会认领，误清就等于把这笔水丢了
-                is ApiResult.Err -> AppLog.w("Device", "对账失败，保留记录: ${r.message}")
+                is ApiResult.Err -> {
+                    // 网络失败不销毁记录：下次启动还有机会认领，误清就等于把这笔水丢了
+                    AppLog.w("Device", "对账失败，保留记录: ${r.message}")
+                    // 但鉴权失效不是网络问题 —— 记录留着也没意义，登出会一并清掉
+                    handleAuthError(r.code)
+                }
             }
         }
     }

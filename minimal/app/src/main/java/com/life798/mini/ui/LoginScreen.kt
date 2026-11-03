@@ -196,7 +196,13 @@ fun LoginScreen(
                 colors = ButtonDefaults.textButtonColors(
                     color = Color.Transparent,
                     textColor = MiuixTheme.colorScheme.primary
-                )
+                ),
+                // 宽度必须固定。之前是 wrap content：点下去文字从「获取验证码」变「59s」，
+                // 按钮变窄，左边 weight(1f) 的输入框就吃掉空出来的宽度，瞬间撑大一下。
+                // 108dp 跟上面图形验证码框同宽，两块右边缘对齐。
+                modifier = Modifier
+                    .width(108.dp)
+                    .height(56.dp)
             )
         }
 
