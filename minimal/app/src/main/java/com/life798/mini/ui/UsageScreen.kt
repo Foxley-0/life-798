@@ -312,7 +312,7 @@ private fun SummaryColumn(
     }
 }
 
-/** 每日用水折线。 */
+/** 每日用水折线。标题由 [DailyUsageChart] 自带，这里只负责卡片外壳和内边距。 */
 @Composable
 private fun DailyChartCard(year: Int, month: Int, daily: Map<Int, Double>) {
     val points = remember(year, month, daily) {
@@ -321,26 +321,9 @@ private fun DailyChartCard(year: Int, month: Int, daily: Map<Int, Double>) {
         val lastDay = if (cursor == YearMonth.from(today)) today.dayOfMonth else cursor.lengthOfMonth()
         (1..lastDay).map { day -> UsagePoint(day, daily[day] ?: 0.0) }
     }
-    val peak = daily.values.maxOrNull() ?: 0.0
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "每日用水",
-                    modifier = Modifier.weight(1f),
-                    fontSize = 13.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                )
-                if (peak > 0.0) {
-                    Text(
-                        text = "最高 ${liters(peak)} 升",
-                        fontSize = 11.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    )
-                }
-            }
-            Spacer(Modifier.height(10.dp))
             DailyUsageChart(points = points)
         }
     }

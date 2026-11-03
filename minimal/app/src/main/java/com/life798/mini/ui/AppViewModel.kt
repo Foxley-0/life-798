@@ -34,11 +34,12 @@ private const val BILL_SETTLE_DELAY_MS = 8000L
  * 启动成功后补 `gene.time`（会话身份证）的节奏。
  *
  * `dev/start` 只是把指令下发下去，设备转成 `status=1` 有延迟，`time` 字段要等它出现。
- * 实测 1.2 秒时还查不到，所以隔 800ms 再试，最多 6 次（约 5 秒）。
+ * 实测 3 秒时还查不到、8 秒时才有，所以不能只试一两次：
+ * 每 1 秒查一次、最多 20 次（约 20 秒），拿到就停。
  * 记录本身在启动成功那一刻就已经落盘，这里只是补一个更精确的判定依据。
  */
-private const val SESSION_FINGERPRINT_INTERVAL_MS = 800L
-private const val SESSION_FINGERPRINT_ATTEMPTS = 6
+private const val SESSION_FINGERPRINT_INTERVAL_MS = 1000L
+private const val SESSION_FINGERPRINT_ATTEMPTS = 20
 
 data class UiState(
     val ready: Boolean = false,

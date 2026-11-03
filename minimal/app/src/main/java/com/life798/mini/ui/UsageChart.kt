@@ -45,7 +45,9 @@ fun DailyUsageChart(points: List<UsagePoint>, modifier: Modifier = Modifier) {
             Text("每日用水", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.weight(1f))
             Text(
-                text = if (max > 0.0) "最高 ${liters(max)} 升" else "暂无数据",
+                // 没有数据时右侧留空：中间那块已经写了「暂无数据」，
+                // 两处都写等于同一句话说了两遍
+                text = if (max > 0.0) "最高 ${liters(max)} 升" else "",
                 fontSize = 12.sp,
                 color = summary
             )
