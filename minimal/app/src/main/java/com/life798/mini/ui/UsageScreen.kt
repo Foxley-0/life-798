@@ -1,5 +1,6 @@
 package com.life798.mini.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,11 +14,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -34,10 +39,10 @@ import androidx.compose.ui.unit.sp
 import com.life798.mini.core.BillRecord
 import com.life798.mini.core.BillStore
 import com.life798.mini.core.BillTotals
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
@@ -45,29 +50,39 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.ChevronBackward
-import top.yukonga.miuix.kmp.icon.extended.ChevronForward
 import top.yukonga.miuix.kmp.icon.extended.ListView
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import java.time.LocalDate
 import java.time.YearMonth
 
-private val USAGE_TABS = listOf("明细", "日历", "统计")
+private val USAGE_TABS = listOf("明细", "统计")
 
 private const val TAB_DETAIL = 0
-private const val TAB_CALENDAR = 1
-private const val TAB_STATS = 2
+private const val TAB_STATS = 1
 
-/** 一次读取的账单快照。同一屏内三个 tab 共用，避免反复解析 JSON。 */
+/** 一次读取的账单快照。 */
 private data class BillSnapshot(
+    /** 全部账单，时间倒序。明细就是把它从头到尾铺开。 */
     val bills: List<BillRecord>,
+    /** 本月（当前自然月）合计。 */
     val monthTotals: BillTotals,
+    /** 本年合计。 */
     val yearTotals: BillTotals,
     val activeDays: Int,
-    val daily: Map<Int, Double>,
-    val earliest: Long?
+    val daily: Map<Int, Double>
 )
+
+/**
+ * 时间线上的一项：要么是月份标题，要么是一天的账单组。
+ *
+ * 明细不再按月份切换查看，而是从最新一路往下铺，跨月时插一个月份标题分隔。
+ */
+private sealed interface TimelineItem {
+    data class Month(val ym: YearMonth, val totals: BillTotals) : TimelineItem
+    data class Day(val date: LocalDate, val bills: List<BillRecord>) : TimelineItem
+}
 
 /**
  * 用水账本页。
@@ -76,43 +91,52 @@ private data class BillSnapshot(
  * - 时间、金额、设备名来自 `/bill/lst-owner`
  * - 升数、时长来自 `/bill/view-full`
  *
- * 进页面自动同步一次，下拉也能手动刷新。同步失败时本地数据照常显示，
- * 只在顶部提一句，不清空。
+ * 明细是一条连续时间线：月份标题 → 当天卡片 → 下一组，跨月自动插入新标题。
+ * 点月份标题可以弹出月份选择，直接跳到那个月。
  */
 @Composable
 fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
     val context = LocalContext.current
     val store = remember { BillStore(context) }
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     var tab by rememberSaveable { mutableIntStateOf(TAB_DETAIL) }
-    var year by rememberSaveable { mutableIntStateOf(LocalDate.now().year) }
-    var month by rememberSaveable { mutableIntStateOf(LocalDate.now().monthValue) }
+    var showMonthPicker by rememberSaveable { mutableStateOf(false) }
 
     // 进页面同步一次。key 用 Unit，只在首次进入时触发，切 tab 不重复请求
     LaunchedEffect(Unit) { onSync() }
 
-    val snapshot = remember(year, month, state.billsRevision) {
+    val snapshot = remember(state.billsRevision) {
+        val now = YearMonth.now()
         BillSnapshot(
-            bills = store.monthBills(year, month),
-            monthTotals = store.monthTotals(year, month),
-            yearTotals = store.yearTotals(year),
-            activeDays = store.monthDays(year, month),
-            daily = store.monthDailyLiters(year, month),
-            earliest = store.earliestAt()
+            bills = store.all(),
+            monthTotals = store.monthTotals(now.year, now.monthValue),
+            yearTotals = store.yearTotals(now.year),
+            activeDays = store.monthDays(now.year, now.monthValue),
+            daily = store.monthDailyLiters(now.year, now.monthValue)
         )
     }
 
-    // 账单已经按时间倒序，groupBy 保序，所以分组天然是最新的天在前
-    val groups = remember(snapshot) {
-        snapshot.bills.groupBy { it.at.toLocalDate() }.toList()
+    // 扁平化成「月份标题 + 每天一组」，LazyColumn 才能按下标跳转
+    val timeline = remember(snapshot) { buildTimeline(snapshot.bills) }
+
+    // 每个月标题在 timeline 里的下标，供月份选择跳转用
+    val monthIndex = remember(timeline) {
+        buildMap {
+            timeline.forEachIndexed { index, item ->
+                if (item is TimelineItem.Month) put(item.ym, index)
+            }
+        }
     }
 
-    val cursor = YearMonth.of(year, month)
-    val thisMonth = YearMonth.now()
-    val earliestMonth = snapshot.earliest?.let { YearMonth.from(it.toLocalDate()) }
-    val canForward = cursor < thisMonth
-    val canBackward = earliestMonth != null && cursor > earliestMonth
+    // 时间线前面还有固定 item（tabs / 错误条 / 汇总卡），跳转时要补上这段偏移
+    val headerCount = if (tab == TAB_DETAIL) {
+        if (state.billsError != null) 3 else 2
+    } else {
+        if (state.billsError != null) 2 else 1
+    }
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
@@ -128,6 +152,7 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
             modifier = Modifier.weight(1f)
         ) {
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .overScrollVertical()
@@ -146,7 +171,7 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
                             tabs = USAGE_TABS,
                             selectedTabIndex = tab,
                             onTabSelected = { tab = it },
-                            modifier = Modifier.width(240.dp),
+                            modifier = Modifier.width(160.dp),
                             minWidth = 76.dp,
                             maxWidth = 76.dp
                         )
@@ -158,69 +183,30 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
                     item(key = "error") { SyncErrorCard(error) }
                 }
 
-                item(key = "month") {
-                    MonthSwitcher(
-                        year = year,
-                        month = month,
-                        canBackward = canBackward,
-                        canForward = canForward,
-                        onBackward = { cursor.minusMonths(1).let { year = it.year; month = it.monthValue } },
-                        onForward = { cursor.plusMonths(1).let { year = it.year; month = it.monthValue } }
-                    )
-                }
-
                 when (tab) {
-                    TAB_CALENDAR -> item(key = "calendar") {
-                        Card(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp)) {
-                                UsageCalendar(year = year, month = month, daily = snapshot.daily)
-                                Spacer(Modifier.height(10.dp))
-                                Text(
-                                    text = if (snapshot.activeDays > 0) {
-                                        "本月 ${snapshot.activeDays} 天有记录，合计 ${liters(snapshot.monthTotals.liters)} 升"
-                                    } else {
-                                        "本月还没有用水记录"
-                                    },
-                                    fontSize = 12.sp,
-                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                )
-                            }
-                        }
-                    }
-
                     TAB_STATS -> {
                         item(key = "stats") {
-                            Card(Modifier.fillMaxWidth()) {
-                                Column(
-                                    Modifier.padding(20.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text(
-                                        text = "${month}月用水合计",
-                                        fontSize = 13.sp,
-                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                    )
-                                    Text(
-                                        text = "${liters(snapshot.monthTotals.liters)} 升",
-                                        fontSize = 30.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = if (snapshot.activeDays > 0) {
-                                            "共 ${snapshot.activeDays} 天 · 花费 ${yuan(snapshot.monthTotals.yuan)} · 本年 ${liters(snapshot.yearTotals.liters)} 升"
-                                        } else {
-                                            "暂无记录 · 本年 ${liters(snapshot.yearTotals.liters)} 升"
-                                        },
-                                        fontSize = 12.sp,
-                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                    )
-                                }
-                            }
+                            MonthStatsCard(
+                                monthTotals = snapshot.monthTotals,
+                                yearTotals = snapshot.yearTotals,
+                                activeDays = snapshot.activeDays
+                            )
                         }
                         item(key = "trend") {
                             Card(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(20.dp)) {
-                                    DailyUsageChart(points = chartPoints(year, month, snapshot.daily))
+                                    val thisMonth = YearMonth.now()
+                                    val today = LocalDate.now()
+                                    val lastDay = if (YearMonth.from(today) == thisMonth) {
+                                        today.dayOfMonth
+                                    } else {
+                                        thisMonth.lengthOfMonth()
+                                    }
+                                    DailyUsageChart(
+                                        points = (1..lastDay).map { day ->
+                                            UsagePoint(day, snapshot.daily[day] ?: 0.0)
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -234,12 +220,29 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
                             )
                         }
 
-                        if (groups.isEmpty()) {
+                        if (timeline.isEmpty()) {
                             item(key = "empty") { UsageEmptyCard(syncing = state.billsSyncing) }
                         } else {
-                            groups.forEach { (date, bills) ->
-                                item(key = "day-$date") {
-                                    DayGroup(date = date, bills = bills)
+                            itemsIndexed(
+                                items = timeline,
+                                key = { _, item ->
+                                    when (item) {
+                                        is TimelineItem.Month -> "month-${item.ym}"
+                                        is TimelineItem.Day -> "day-${item.date}"
+                                    }
+                                }
+                            ) { _, item ->
+                                when (item) {
+                                    is TimelineItem.Month -> MonthHeader(
+                                        ym = item.ym,
+                                        totals = item.totals,
+                                        onClick = { showMonthPicker = true }
+                                    )
+
+                                    is TimelineItem.Day -> DayGroup(
+                                        date = item.date,
+                                        bills = item.bills
+                                    )
                                 }
                             }
                         }
@@ -248,14 +251,40 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
             }
         }
     }
+
+    if (showMonthPicker) {
+        MonthPickerDialog(
+            months = timeline.filterIsInstance<TimelineItem.Month>().map { it.ym },
+            onDismiss = { showMonthPicker = false },
+            onPick = { ym ->
+                showMonthPicker = false
+                monthIndex[ym]?.let { index ->
+                    scope.launch { listState.animateScrollToItem(headerCount + index) }
+                }
+            }
+        )
+    }
 }
 
-/** 折线点：从 1 号铺到今天（或月末），没记录的天补 0，曲线才不会断。 */
-private fun chartPoints(year: Int, month: Int, daily: Map<Int, Double>): List<UsagePoint> {
-    val cursor = YearMonth.of(year, month)
-    val today = LocalDate.now()
-    val lastDay = if (cursor == YearMonth.from(today)) today.dayOfMonth else cursor.lengthOfMonth()
-    return (1..lastDay).map { day -> UsagePoint(day, daily[day] ?: 0.0) }
+/** 把账单按「月 → 天」摊平成时间线。账单本身已按时间倒序，groupBy 保序。 */
+private fun buildTimeline(bills: List<BillRecord>): List<TimelineItem> = buildList {
+    val byMonth = bills.groupBy { YearMonth.from(it.at.toLocalDate()) }
+        .toList()
+        .sortedByDescending { it.first }
+    byMonth.forEach { (ym, monthBills) ->
+        add(
+            TimelineItem.Month(
+                ym = ym,
+                totals = BillTotals(
+                    liters = monthBills.mapNotNull { it.liters }.sum(),
+                    yuan = monthBills.sumOf { it.yuan }
+                )
+            )
+        )
+        monthBills.groupBy { it.at.toLocalDate() }.forEach { (date, dayBills) ->
+            add(TimelineItem.Day(date, dayBills))
+        }
+    }
 }
 
 @Composable
@@ -270,40 +299,93 @@ private fun SyncErrorCard(message: String) {
     }
 }
 
+/**
+ * 月份标题。
+ *
+ * 比日期标题大一号，用来在连续时间线里切开月份。右侧带该月合计，
+ * 整行可点，点了弹出月份选择。
+ */
 @Composable
-private fun MonthSwitcher(
-    year: Int,
-    month: Int,
-    canBackward: Boolean,
-    canForward: Boolean,
-    onBackward: () -> Unit,
-    onForward: () -> Unit
-) {
-    val enabledTint = MiuixTheme.colorScheme.onSurface
-    val disabledTint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.3f)
-
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onBackward, enabled = canBackward) {
-            Icon(
-                imageVector = MiuixIcons.ChevronBackward,
-                contentDescription = "上个月",
-                modifier = Modifier.size(20.dp),
-                tint = if (canBackward) enabledTint else disabledTint
-            )
-        }
+private fun MonthHeader(ym: YearMonth, totals: BillTotals, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Text(
-            text = monthTitle(year, month),
+            text = "${ym.year}年${ym.monthValue}月",
             modifier = Modifier.weight(1f),
-            fontSize = 17.sp,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold
         )
-        IconButton(onClick = onForward, enabled = canForward) {
-            Icon(
-                imageVector = MiuixIcons.ChevronForward,
-                contentDescription = "下个月",
-                modifier = Modifier.size(20.dp),
-                tint = if (canForward) enabledTint else disabledTint
+        Text(
+            text = "${liters(totals.liters)} 升 · ${yuan(totals.yuan)}",
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+        )
+    }
+}
+
+/** 月份选择：只列有记录的月份，点一下滚到那个月。 */
+@Composable
+private fun MonthPickerDialog(
+    months: List<YearMonth>,
+    onDismiss: () -> Unit,
+    onPick: (YearMonth) -> Unit
+) {
+    OverlayDialog(
+        show = true,
+        title = "选择月份",
+        onDismissRequest = onDismiss
+    ) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+            months.forEachIndexed { index, ym ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPick(ym) }
+                        .padding(horizontal = 24.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${ym.year}年${ym.monthValue}月",
+                        modifier = Modifier.weight(1f),
+                        fontSize = 16.sp
+                    )
+                }
+                if (index != months.lastIndex) {
+                    HorizontalDivider(Modifier.padding(horizontal = 24.dp))
+                }
+            }
+        }
+    }
+}
+
+/** 统计页顶部：本月用水 + 本年合计。 */
+@Composable
+private fun MonthStatsCard(monthTotals: BillTotals, yearTotals: BillTotals, activeDays: Int) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "${YearMonth.now().monthValue}月用水合计",
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+            )
+            Text(
+                text = "${liters(monthTotals.liters)} 升",
+                fontSize = 30.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = if (activeDays > 0) {
+                    "共 $activeDays 天 · 花费 ${yuan(monthTotals.yuan)} · 本年 ${liters(yearTotals.liters)} 升"
+                } else {
+                    "暂无记录 · 本年 ${liters(yearTotals.liters)} 升"
+                },
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
             )
         }
     }
@@ -461,7 +543,7 @@ private fun UsageEmptyCard(syncing: Boolean) {
                 tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
             )
             Text(
-                text = if (syncing) "正在同步账单…" else "本月还没有账单",
+                text = if (syncing) "正在同步账单…" else "还没有账单",
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Medium
             )
