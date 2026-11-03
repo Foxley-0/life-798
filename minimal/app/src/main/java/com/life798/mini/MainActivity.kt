@@ -42,7 +42,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -60,6 +59,7 @@ import com.life798.mini.ui.ReferencesScreen
 import com.life798.mini.ui.AppViewModel
 import com.life798.mini.ui.AppearanceScreen
 import com.life798.mini.ui.LoginScreen
+import com.life798.mini.ui.MainTabsPagerState
 import com.life798.mini.ui.MiniTheme
 import com.life798.mini.ui.components.LocalBarBlurBackdrop
 import com.life798.mini.ui.components.liquid.IosLiquidGlassNavigationBar
@@ -76,9 +76,6 @@ import com.life798.mini.ui.components.BarBackdropContent
 import com.life798.mini.ui.components.BarBlurHost
 import com.life798.mini.ui.components.barBlurBackground
 import com.life798.mini.ui.isDarkTheme
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
@@ -97,25 +94,15 @@ import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-private enum class Tab { SCAN, USAGE, SETTINGS }
-
 /**
- * tab 与 Pager 页号的双向映射。
+ * 底栏页号。0 扫描 / 1 用量 / 2 设置。
  *
- * 之前只有两个 tab，代码里直接写 `if (page == 0) SCAN else SETTINGS`。
- * 加到三个之后这种二选一写法会让第三个 tab 串位，统一走这里。
+ * 以前用 `Tab` 枚举 + 两个映射函数互转，切换链路是
+ * 「点击 → 枚举 → 页号 → 写 tab → 副作用监听 tab → 滚」，
+ * 中间隔着一层状态和一次重组，连点必然丢。现在全程只用一个 Int。
  */
-private fun tabIndex(tab: String): Int = when (tab) {
-    Tab.SCAN.name -> 0
-    Tab.USAGE.name -> 1
-    else -> 2
-}
-
-private fun tabAt(index: Int): String = when (index) {
-    0 -> Tab.SCAN.name
-    1 -> Tab.USAGE.name
-    else -> Tab.SETTINGS.name
-}
+private const val PAGE_SCAN = 0
+private const val PAGE_COUNT = 3
 
 /**
  * 路由。TABS 是底部导航的根，其余都是叠在它上面的二级页。
@@ -206,17 +193,17 @@ private fun MiniApp(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var tab by rememberSaveable { mutableStateOf(Tab.SCAN.name) }
     /**
-     * Pager 提到这里，是导航栏能「跟手」的前提。
+     * Pager 提到这里，是导航栏能「跟手」的前提：底栏和内容页必须读同一个 Pager。
      *
-     * 之前 pager 活在 MainContent 里面，导航栏只能等 `settledPage` 变了才更新，
-     * 所以滑动时高亮要等页面停稳才跳。现在底栏直接读 `pagerState.currentPage`，
-     * 手指划过一半就跟着换。
+     * 高亮状态不直接读 `pagerState`，统一交给 [MainTabsPagerState] ——
+     * 点击瞬间置位、滑动时跟随、动画期间不被中间页污染，三件事它自己管。
      */
-    val pagerState = rememberPagerState(initialPage = tabIndex(tab)) { 3 }
-    /** 上一次点击发起的滚动。连点时必须先取消它，否则两个动画抢同一个 pager。 */
-    var pagerJob by remember { mutableStateOf<Job?>(null) }
+    val pagerState = rememberPagerState(initialPage = PAGE_SCAN) { PAGE_COUNT }
+    val tabs = remember(pagerState, scope) { MainTabsPagerState(pagerState, scope) }
+
+    // 手指滑动时把高亮同步过来。点击动画期间 syncPage 会自己跳过。
+    LaunchedEffect(pagerState.currentPage) { tabs.syncPage() }
 
     var stack by rememberSaveable(stateSaver = RouteStackSaver) {
         mutableStateOf(emptyList<String>())
@@ -233,41 +220,25 @@ private fun MiniApp(
     /**
      * 切 tab 的唯一入口。
      *
-     * 之前的写法是「写 tab → 副作用监听到 tab 变了再滚」，中间隔着一次重组，
-     * 连点时后一次点击会被 pager 自己回写的 settledPage 覆盖掉，表现为点了没反应。
-     * 现在点击直接滚，[tab] 只是镜像，谁也覆盖不了谁。
+     * 不再「写 tab → 副作用监听到 tab 变了再滚」：那条链路中间隔着一次重组，
+     * 连点时后一次点击会被 Pager 回写的状态覆盖，表现为点了没反应。
+     * 现在点击直接推 [MainTabsPagerState.selectedPage] 并滚，只有一个源。
      */
-    fun goTab(target: String) {
-        val index = tabIndex(target)
-        if (tab == target && pagerState.currentPage == index) return
-        AppLog.i("Nav", "切换 tab → $target")
-        tab = target
-        pagerJob?.cancel()
-        pagerJob = scope.launch { pagerState.animateScrollToPage(index) }
-    }
-
-    // pager 停稳后把结果写回 tab。只认 settledPage：
-    // 动画途中会经过中间页（0→2 必过 1），用 currentPage 会把 tab 改错。
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }
-            .distinctUntilChanged()
-            .collect { page ->
-                val t = tabAt(page)
-                if (tab != t) tab = t
-            }
+    fun goTab(index: Int) {
+        AppLog.i("Nav", "切换 tab → $index")
+        tabs.animateToPage(index)
     }
 
     // 登录态失效（主动登出 / token 过期）时把导航整体归零。
     // 否则重新登录会直接落在上一次停留的页面，甚至卡在一个没有设备号的启动页。
     LaunchedEffect(state.loggedIn) {
         if (!state.loggedIn) {
-            if (stack.isNotEmpty() || tab != Tab.SCAN.name) {
-                AppLog.i("Nav", "登录态失效，重置导航 stack=$stack tab=$tab")
+            if (stack.isNotEmpty() || tabs.selectedPage != PAGE_SCAN) {
+                AppLog.i("Nav", "登录态失效，重置导航 stack=$stack page=${tabs.selectedPage}")
             }
             stack = emptyList()
-            tab = Tab.SCAN.name
-            pagerJob?.cancel()
-            pagerState.scrollToPage(0)
+            tabs.reset()
+            pagerState.scrollToPage(PAGE_SCAN)
         }
     }
 
@@ -357,7 +328,7 @@ private fun MiniApp(
             return
         }
         lastNavAt = now
-        AppLog.i("Nav", "back stack=$stack tab=$tab")
+        AppLog.i("Nav", "back stack=$stack page=${tabs.selectedPage}")
         if (stack.lastOrNull() == Route.START.name) {
             confirmExitStart = true
         } else {
@@ -373,7 +344,9 @@ private fun MiniApp(
 
             stack.isNotEmpty() -> requestBack()
 
-            tab != Tab.SCAN.name -> goTab(Tab.SCAN.name)
+            // selectedPage 是 0 但 Pager 停在别页（上次动画被手势打断）也要回去
+            tabs.selectedPage != PAGE_SCAN || pagerState.currentPage != PAGE_SCAN ->
+                goTab(PAGE_SCAN)
 
             else -> {
                 // 扫码页：先把相机停掉再提示，否则用户以为返回没反应，
@@ -400,7 +373,8 @@ private fun MiniApp(
             MainScaffold(
                 state = state,
                 vm = vm,
-                onTabChange = { goTab(it) },
+                selected = tabs.selectedPage,
+                onSelected = { goTab(it) },
                 pagerState = pagerState,
                 stack = stack,
                 onPush = ::push,
@@ -459,7 +433,8 @@ private fun MiniApp(
 private fun MainScaffold(
     state: UiState,
     vm: AppViewModel,
-    onTabChange: (String) -> Unit,
+    selected: Int,
+    onSelected: (Int) -> Unit,
     pagerState: PagerState,
     stack: List<String>,
     onPush: (Route) -> Unit,
@@ -488,8 +463,8 @@ private fun MainScaffold(
                 exit = slideOutVertically(tween(200)) { it } + fadeOut(tween(140))
             ) {
                 BottomBar(
-                    pagerState = pagerState,
-                    onTabChange = onTabChange,
+                    selected = selected,
+                    onSelected = onSelected,
                     style = bottomBarStyle
                 )
             }
@@ -558,17 +533,15 @@ private fun MainScaffold(
  * 关键：`FloatingNavigationBar` 的 modifier 最终作用在内部 Row 上（不是外层 Column），
  * 所以模糊层的 shape 必须是圆角矩形，否则会把胶囊盖成方的。
  *
- * 高亮读的是 `pagerState.currentPage`（当前离得最近的那一页），不是「已经停稳的页」——
- * 后者要等滑动完全结束才变，手指划过一半导航栏还纹丝不动，看着像卡住了。
+ * 高亮由 `MainTabsPagerState.selectedPage` 提供：点击瞬间置位（不用等 Pager 滚过半页），
+ * 手指滑动时由 `syncPage()` 跟随，点击动画期间不会被途经的中间页改写。
  */
 @Composable
 private fun BottomBar(
-    pagerState: PagerState,
-    onTabChange: (String) -> Unit,
+    selected: Int,
+    onSelected: (Int) -> Unit,
     style: Int
 ) {
-    val selected = pagerState.currentPage
-
     if (style == UiPrefs.BOTTOM_BAR_PILL) {
         // 液态玻璃底栏（照搬 SonyPods）：采样 BarBlurHost 提供的 backdrop，
         // backdrop 为 null 时组件内部自动退化成普通胶囊
@@ -579,7 +552,7 @@ private fun BottomBar(
                 NavigationItem("设置", MiuixIcons.Settings),
             ),
             selectedIndex = selected,
-            onItemClick = { onTabChange(tabAt(it)) },
+            onItemClick = onSelected,
             backdrop = LocalBarBlurBackdrop.current,
             modifier = Modifier.zIndex(2f)
         )
@@ -591,19 +564,19 @@ private fun BottomBar(
         ) {
             NavigationBarItem(
                 selected = selected == 0,
-                onClick = { onTabChange(Tab.SCAN.name) },
+                onClick = { onSelected(0) },
                 icon = MiuixIcons.Scan,
                 label = "扫描"
             )
             NavigationBarItem(
                 selected = selected == 1,
-                onClick = { onTabChange(Tab.USAGE.name) },
+                onClick = { onSelected(1) },
                 icon = MiuixIcons.Months,
                 label = "用量"
             )
             NavigationBarItem(
                 selected = selected == 2,
-                onClick = { onTabChange(Tab.SETTINGS.name) },
+                onClick = { onSelected(2) },
                 icon = MiuixIcons.Settings,
                 label = "设置"
             )
@@ -685,6 +658,10 @@ private fun MainContent(
 
                 HorizontalPager(
                     state = pagerState,
+                    // 相邻页提前组合：手指刚拖动时对面那页已经有内容，
+                    // 不会出现「滑过去先白一下」——这也是跟手感的一部分
+                    beyondViewportPageCount = 1,
+                    key = { it },
                     // AndroidView 默认不裁剪，相机会溢出到相邻页上，看起来像两页重叠
                     modifier = Modifier
                         .fillMaxSize()
