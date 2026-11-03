@@ -646,7 +646,11 @@ private fun MainContent(
                                 pauseTick = scanPauseTick
                             )
 
-                            1 -> UsageScreen(state = state, bottomInset = bottomInset)
+                            1 -> UsageScreen(
+                                state = state,
+                                bottomInset = bottomInset,
+                                onSync = vm::syncBills
+                            )
 
                             else -> SettingsScreen(
                                 state = state,

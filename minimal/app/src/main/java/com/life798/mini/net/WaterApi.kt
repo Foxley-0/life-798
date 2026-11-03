@@ -3,6 +3,7 @@ package com.life798.mini.net
 import com.life798.mini.BuildConfig
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
+import com.life798.mini.core.BillRecord
 import com.life798.mini.core.DeviceStatus
 import com.life798.mini.core.Session
 import kotlinx.coroutines.Dispatchers
@@ -161,6 +162,87 @@ class WaterApi(
         }
     }
 
+    // ---------- 账单 ----------
+
+    /**
+     * 账单列表，`status=3` 即「已付款」。
+     *
+     * 列表**不含用量**，只有时间、金额、设备名（在 msg 里）。用量得靠
+     * [billDetail] 逐条补，所以这里返回的记录 `liters` 一律为 null。
+     */
+    suspend fun billList(token: String, page: Int = 0, size: Int = 20): ApiResult<List<BillRecord>> = io {
+        val url = "$base/bill/lst-owner?page=$page&size=$size&hasCount=true&status=3"
+        val req = builder(url).header("Authorization", token).get().build()
+        call(req) { json ->
+            // 没有数据时服务端返回 {"code":0,"size":"0"}，根本没有 data 字段
+            val array = json.optJSONArray("data") ?: return@call emptyList<BillRecord>()
+            buildList {
+                for (i in 0 until array.length()) {
+                    val item = array.optJSONObject(i) ?: continue
+                    val id = item.optString("id")
+                    if (id.isBlank()) continue
+                    val payment = item.optDouble("payment", 0.0)
+                    // 0 元是「启动了但没出水」的空账单，抓包实证：out 全程不变，用量 0 升
+                    if (payment <= 0.0) continue
+                    // utime 是结算时刻，ctime 是创建时刻；结算时刻更贴近实际用水结束
+                    val at = item.optLong("utime", 0L).takeIf { it > 0L }
+                        ?: item.optLong("ctime", 0L)
+                    if (at <= 0L) continue
+                    add(
+                        BillRecord(
+                            id = id,
+                            at = at,
+                            yuan = payment,
+                            deviceName = deviceNameFromMsg(item.optString("msg")),
+                            liters = null,
+                            secs = null
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * 账单详情，只有这里有用水量。
+     *
+     * 关键字段：`data.bill.dev.subs[0].out` 是本次用量（升），
+     * `data.bill.dev.gene.secs` 是出水时长（秒）。
+     */
+    suspend fun billDetail(token: String, billId: String): ApiResult<BillRecord> = io {
+        val url = "$base/bill/view-full?id=${encode(billId)}"
+        val req = builder(url).header("Authorization", token).get().build()
+        call(req) { json ->
+            val bill = json.optJSONObject("data")?.optJSONObject("bill")
+                ?: error("账单详情为空")
+            val dev = bill.optJSONObject("dev")
+            val subs = dev?.optJSONArray("subs")
+            // subs 是数组，实测只有一项，取第一项的 out
+            val liters = subs?.optJSONObject(0)?.optDouble("out", -1.0)
+                ?.takeIf { it >= 0.0 }
+            val secs = dev?.optJSONObject("gene")?.optDouble("secs", -1.0)
+                ?.takeIf { it >= 0.0 }
+            val at = bill.optLong("utime", 0L).takeIf { it > 0L }
+                ?: bill.optLong("ctime", 0L)
+            BillRecord(
+                id = bill.optString("id").ifBlank { billId },
+                at = at,
+                yuan = bill.optDouble("payment", 0.0),
+                deviceName = dev?.optString("name")?.takeIf { it.isNotBlank() }
+                    ?: deviceNameFromMsg(bill.optString("msg")),
+                liters = liters,
+                secs = secs
+            )
+        }
+    }
+
+    /** `水表/淋浴器设备(雅5-1楼-洗漱间-热水龙头2)消费` → `雅5-1楼-洗漱间-热水龙头2`。 */
+    private fun deviceNameFromMsg(msg: String): String? {
+        if (msg.isBlank()) return null
+        val matched = DEVICE_NAME.find(msg)?.groupValues?.getOrNull(1)?.trim()
+        return matched?.takeIf { it.isNotBlank() }
+    }
+
     // ---------- 内部工具 ----------
 
     private fun builder(url: String): Request.Builder = Request.Builder()
@@ -229,4 +311,9 @@ class WaterApi(
     }
 
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
+
+    private companion object {
+        /** 从 `水表/淋浴器设备(XXX)消费` 里抠出设备名。 */
+        val DEVICE_NAME = Regex("""设备\((.+?)\)""")
+    }
 }

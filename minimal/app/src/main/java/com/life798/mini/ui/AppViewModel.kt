@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
+import com.life798.mini.core.BillStore
 import com.life798.mini.core.Prefs
 import com.life798.mini.core.UsageLedger
 import com.life798.mini.net.WaterApi
@@ -50,6 +51,12 @@ data class UiState(
     val lastUsageLiters: Double? = null,
     /** 账本版本号：每落一笔 +1，用量页拿它当刷新键。 */
     val ledgerRevision: Int = 0,
+    /** 正在同步服务端账单（拉列表 + 补详情）。 */
+    val billsSyncing: Boolean = false,
+    /** 账单版本号：同步一次 +1，账本页拿它当刷新键。 */
+    val billsRevision: Int = 0,
+    /** 账单同步失败的原因。本地数据照常显示，只在页面顶部提一句。 */
+    val billsError: String? = null,
     val message: String? = null,
     /** 配合 [message]：true 表示这是错误提示，界面上用错误色。 */
     val messageIsError: Boolean = false,
@@ -64,6 +71,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs(app)
     private val api = WaterApi()
     private val ledger = UsageLedger(app)
+    private val billStore = BillStore(app)
 
     private val _ui = MutableStateFlow(UiState(configured = api.isConfigured))
 
@@ -220,6 +228,66 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 messageIsError = false
             )
             refreshCaptcha()
+        }
+    }
+
+    // ---------------- 账单 ----------------
+
+    /**
+     * 从服务端同步账单。
+     *
+     * 分两步：
+     * 1. 拉第一页列表合并入库 —— 时间、金额、设备名立刻可显示
+     * 2. 本地缺升数的账单逐条补详情 —— 列表接口不带用量，只有详情有
+     *
+     * 已经补过详情的不会重复拉，所以日常只多 1~2 次请求。
+     * 失败时不清本地数据，只把原因放进 [UiState.billsError]。
+     */
+    fun syncBills() {
+        val token = _ui.value.token
+        if (token.isBlank()) return
+        if (_ui.value.billsSyncing) return
+
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(billsSyncing = true, billsError = null)
+
+            when (val list = api.billList(token, page = 0)) {
+                is ApiResult.Err -> {
+                    AppLog.w("Bill", "账单列表同步失败: ${list.message}")
+                    _ui.value = _ui.value.copy(billsSyncing = false, billsError = list.message)
+                    return@launch
+                }
+
+                is ApiResult.Ok -> {
+                    val added = billStore.merge(list.data)
+                    AppLog.i("Bill", "账单列表 ${list.data.size} 条，新增 $added")
+
+                    var filled = 0
+                    var failed = 0
+                    for (id in billStore.missingDetail()) {
+                        when (val detail = api.billDetail(token, id)) {
+                            is ApiResult.Ok -> {
+                                val bill = detail.data
+                                if (bill.liters != null) {
+                                    billStore.updateDetail(id, bill.liters, bill.secs, bill.deviceName)
+                                    filled++
+                                }
+                            }
+                            is ApiResult.Err -> {
+                                failed++
+                                AppLog.w("Bill", "详情失败 id=$id: ${detail.message}")
+                            }
+                        }
+                    }
+                    AppLog.i("Bill", "补详情 $filled 条，失败 $failed 条")
+
+                    _ui.value = _ui.value.copy(
+                        billsSyncing = false,
+                        billsRevision = _ui.value.billsRevision + 1,
+                        billsError = null
+                    )
+                }
+            }
         }
     }
 

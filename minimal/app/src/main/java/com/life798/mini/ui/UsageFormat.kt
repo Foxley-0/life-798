@@ -15,6 +15,19 @@ import java.util.Locale
 /** 升数：统一两位小数，0.299 → "0.30"。 */
 fun liters(value: Double): String = String.format(Locale.CHINA, "%.2f", value)
 
+/** 金额："¥0.02"。0 元账单在同步阶段就被过滤了，这里不会出现 0。 */
+fun yuan(value: Double): String = String.format(Locale.CHINA, "¥%.2f", value)
+
+/** 出水时长："10秒" / "17分11秒" / "1小时3分"。 */
+fun durationLabel(seconds: Double): String {
+    val total = seconds.toInt().coerceAtLeast(0)
+    return when {
+        total < 60 -> "${total}秒"
+        total < 3600 -> "${total / 60}分${total % 60}秒"
+        else -> "${total / 3600}小时${(total % 3600) / 60}分"
+    }
+}
+
 /** 月份标题："2026年11月"。 */
 fun monthTitle(year: Int, month: Int): String = "${year}年${month}月"
 
