@@ -36,5 +36,13 @@ data class DeviceStatus(
      * 注意：这不是实时值，接水过程中不会变，只有结算完成后才跳。
      * 抓包实测关闭后 3 秒仍是旧值，6 秒才更新。
      */
-    val outLiters: Double
+    val outLiters: Double,
+    /**
+     * 本次会话的起始时刻（毫秒），来自 `gene.time`。
+     *
+     * 只在 `status=1` 时下发，停水后整个字段消失。它是**会话的身份证**：
+     * 冷启动对账时拿它和本地存的记录比，一致才说明还是同一次用水，
+     * 不一致说明上一次早结束了、这是别人新开的。
+     */
+    val sessionTime: Long? = null
 )

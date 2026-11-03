@@ -66,6 +66,7 @@ import top.yukonga.miuix.kmp.basic.NavigationItem
 import com.life798.mini.ui.ScanScreen
 import com.life798.mini.ui.SettingsScreen
 import com.life798.mini.ui.StartScreen
+import com.life798.mini.ui.UsingScreen
 import com.life798.mini.ui.THEME_DARK
 import com.life798.mini.ui.THEME_LIGHT
 import com.life798.mini.ui.UiState
@@ -116,9 +117,13 @@ private fun tabAt(index: Int): String = when (index) {
 /**
  * 路由。TABS 是底部导航的根，其余都是叠在它上面的二级页。
  *
+ * START 与 USING 是两个独立页面，不是一个页面两种状态：
+ * 启动只负责开，关闭只负责关。之前挤在一页里，靠 `deviceRunning` 猜该显示哪个按钮，
+ * 状态一乱就点错。
+ *
  * 返回键只做一件事：出栈。所有页面都不再自己挂 BackHandler。
  */
-private enum class Route { TABS, START, ABOUT, THEME, REFERENCES }
+private enum class Route { TABS, START, USING, ABOUT, THEME, REFERENCES }
 
 private val RouteStackSaver = listSaver<List<String>, String>(
     save = { it },
@@ -233,6 +238,42 @@ private fun MiniApp(
         }
     }
 
+    // 启动成功 → 原地把启动页换成用水页（不进栈，返回不会退回一个已经没用的启动页）。
+    // 必须比对设备号：出水期间又扫了另一台设备时，不能把那一页也换成旧会话的用水页。
+    LaunchedEffect(state.session, state.deviceId, stack) {
+        val active = state.session
+        if (active != null &&
+            active.deviceId == state.deviceId &&
+            stack.lastOrNull() == Route.START.name
+        ) {
+            AppLog.i("Nav", "启动成功，启动页 → 用水页")
+            navForward = true
+            stack = stack.dropLast(1) + Route.USING.name
+        }
+    }
+
+    // 冷启动对账成功（服务端确认还在出水）→ 直接回到用水页。
+    // 用 sessionRestoreTick 而不是 session 本身当键：这是**一次性**信号，
+    // 用户自己从用水页返回后不会被立刻拽回去。
+    LaunchedEffect(state.sessionRestoreTick) {
+        if (state.sessionRestoreTick > 0 && state.loggedIn) {
+            AppLog.i("Nav", "认领到未结算会话，进入用水页")
+            navForward = true
+            stack = listOf(Route.USING.name)
+        }
+    }
+
+    // 用水页没有会话、也不是「刚关闭」→ 自动出栈，避免停在一个空页面
+    LaunchedEffect(stack, state.session, state.closed) {
+        if (stack.lastOrNull() == Route.USING.name &&
+            state.session == null &&
+            !state.closed
+        ) {
+            AppLog.i("Nav", "用水页缺少会话，自动出栈")
+            stack = stack.dropLast(1)
+        }
+    }
+
     fun push(route: Route) {
         if (stack.lastOrNull() == route.name) {
             AppLog.i("Nav", "忽略重复入栈 ${route.name}")
@@ -279,7 +320,6 @@ private fun MiniApp(
             pop()
         }
     }
-
     // 全局唯一的返回入口
     BackHandler {
         val inMain = state.ready && state.loggedIn
@@ -339,8 +379,8 @@ private fun MiniApp(
                 title = "确定返回吗？",
                 // 设备还在出水时必须说清楚：返回不会停水，只清编号。
                 // 不提示的话用户会以为退出即关闭，水就一直流着。
-                summary = if (state.deviceRunning) {
-                    "设备仍在运行中，返回只会清除设备编号，不会停止出水。"
+                summary = if (state.session != null) {
+                    "设备仍在出水，返回不会停止出水。可以稍后从「扫描」页回到用水界面关闭。"
                 } else {
                     "返回后设备编号会被清除，需要重新扫描二维码。"
                 },
@@ -562,7 +602,12 @@ private fun MainContent(
             Route.START.name -> StartScreen(
                 state = state,
                 onBack = onBack,
-                onStart = vm::startDevice,
+                onStart = vm::startDevice
+            )
+
+            Route.USING.name -> UsingScreen(
+                state = state,
+                onBack = onBack,
                 onStop = vm::stopDevice
             )
 
@@ -642,7 +687,19 @@ private fun MainContent(
                                 state = state,
                                 onEnter = vm::clearMessage,
                                 onDecoded = vm::onQrDecoded,
-                                onScanned = { onPush(Route.START) },
+                                // 扫的还是正在出水的那台设备 → 直接回用水页，
+                                // 别让用户对着一个「启动」按钮再点一次
+                                onScanned = {
+                                    val active = state.session
+                                    onPush(
+                                        if (active != null && active.deviceId == state.deviceId) {
+                                            Route.USING
+                                        } else {
+                                            Route.START
+                                        }
+                                    )
+                                },
+                                onResumeUsing = { onPush(Route.USING) },
                                 pauseTick = scanPauseTick
                             )
 

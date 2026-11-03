@@ -85,6 +85,8 @@ fun ScanScreen(
     onEnter: () -> Unit,
     onDecoded: (String) -> Boolean,
     onScanned: () -> Unit,
+    /** 有设备正在出水时，浮层上多一个「回到用水界面」的入口 */
+    onResumeUsing: () -> Unit = {},
     /** 每次自增表示「上层要求暂停解码」（按返回键时） */
     pauseTick: Int = 0
 ) {
@@ -320,6 +322,25 @@ fun ScanScreen(
                             onClick = { openAppSettings(context) }
                         )
                     } else {
+                        // 有一条会话还在出水：这是最该被看见的东西，
+                        // 否则用户只能靠记忆想起「我刚才是不是没关水」
+                        state.session?.let { session ->
+                            Text(
+                                text = "「${session.deviceName ?: session.deviceId}」正在出水",
+                                color = MiuixTheme.colorScheme.onSurface,
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Button(
+                                onClick = onResumeUsing,
+                                colors = ButtonDefaults.buttonColorsPrimary(),
+                                modifier = Modifier.height(52.dp)
+                            ) {
+                                Text("回到用水界面", fontSize = 16.sp)
+                            }
+                            Spacer(Modifier.height(28.dp))
+                        }
                         Button(
                             onClick = { startScan() },
                             colors = ButtonDefaults.buttonColorsPrimary(),

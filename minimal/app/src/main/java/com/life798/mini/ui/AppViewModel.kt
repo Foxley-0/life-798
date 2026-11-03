@@ -7,8 +7,9 @@ import androidx.lifecycle.viewModelScope
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.BillStore
+import com.life798.mini.core.DeviceSession
+import com.life798.mini.core.DeviceSessionStore
 import com.life798.mini.core.Prefs
-import com.life798.mini.core.UsageLedger
 import com.life798.mini.net.WaterApi
 import com.life798.mini.scan.QrParser
 import com.life798.mini.scan.QrResult
@@ -19,38 +20,56 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import java.util.Locale
 import kotlin.random.Random
 
 /**
- * 结算轮询：每 2 秒一次，最多 10 次。
+ * 关闭设备后等服务端结算的时间。
  *
- * 抓包实测 6 秒左右能拿到结果，但设备网络差、后端队列堵的时候会更久，
- * 留到 20 秒，避免明明结完了却因为超时丢掉这一笔。
+ * 抓包实测：关闭后 3 秒 `out` 还是旧值，6 秒才跳。等到 8 秒再拉账单，
+ * 这样用户关完水切到「用量」页就能看到这一笔，不用手动下拉。
  */
-private const val SETTLE_INTERVAL_MS = 2000L
-private const val SETTLE_ATTEMPTS = 10
+private const val BILL_SETTLE_DELAY_MS = 8000L
+
+/**
+ * 启动成功后、读 `gene.time` 之前的等待。
+ *
+ * `dev/start` 只是把指令下发下去，设备真正转成 `status=1` 有几百毫秒延迟。
+ * 立刻查会拿到 `status=99` 且 `time` 字段缺失，会话就失去了身份证 ——
+ * 之后冷启动对账只能靠「还在出水」这一条弱条件判断。
+ */
+private const val SESSION_FINGERPRINT_DELAY_MS = 1200L
 
 data class UiState(
     val ready: Boolean = false,
     val token: String = "",
     val phone: String = "",
     val deviceId: String = "",
+    /** 设备名，来自 `/ui/app/dev/home`。拿不到时为空，界面退化成显示编号。 */
+    val deviceName: String = "",
     val captchaKey: String = "",
     val captchaImage: ByteArray? = null,
     val captchaLoading: Boolean = false,
     val captchaError: String? = null,
+    /** 正在启动设备。 */
     val busy: Boolean = false,
     /** 正在关闭设备。和 [busy] 分开，两个按钮各自有自己的转圈。 */
     val stopping: Boolean = false,
-    /** 设备是否正在出水。进页面时向服务端同步，启动/关闭成功后本地更新。 */
-    val deviceRunning: Boolean = false,
-    /** 关闭后正在等服务端结算。结算完成前拿不到本次用量。 */
-    val settling: Boolean = false,
-    /** 最近一次结算出的用量（升）。null 表示本次还没有有效结果。 */
-    val lastUsageLiters: Double? = null,
-    /** 账本版本号：每落一笔 +1，用量页拿它当刷新键。 */
-    val ledgerRevision: Int = 0,
+    /**
+     * 当前用水会话。null 表示没有在用水。
+     *
+     * 它只回答「我现在是不是还在用水」，不参与记账 ——
+     * 账全部来自服务端账单（见 [BillStore]）。
+     */
+    val session: DeviceSession? = null,
+    /** 刚关闭成功，用水页显示「已关闭」。 */
+    val closed: Boolean = false,
+    /**
+     * 冷启动对账成功、从磁盘恢复出一条活会话时 +1。
+     *
+     * 界面拿它当一次性信号：变了就直接跳到用水页。用版本号而不是布尔量，
+     * 是因为用户可能中途返回过、又被恢复到同一条会话，布尔量不会再次触发。
+     */
+    val sessionRestoreTick: Int = 0,
     /** 正在同步服务端账单（拉列表 + 补详情）。 */
     val billsSyncing: Boolean = false,
     /** 账单版本号：同步一次 +1，账本页拿它当刷新键。 */
@@ -70,19 +89,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val prefs = Prefs(app)
     private val api = WaterApi()
-    private val ledger = UsageLedger(app)
     private val billStore = BillStore(app)
 
-    private val _ui = MutableStateFlow(UiState(configured = api.isConfigured))
+    /** 当前会话的落盘记录，用来在进程被杀后重新认领「还在流水」的设备。 */
+    private val sessionStore = DeviceSessionStore(app)
 
-    /**
-     * 本次用量的起点：扫码进页面时读到的累计出水值。
-     *
-     * 服务端的 `gene.out` 是设备装机以来的总量，不是本次用量，必须做差。
-     * 每结算完一次就把它更新成结算后的值，这样同一页面连续接两次水也不会串。
-     * 只在内存里活着，不落盘。
-     */
-    private var baselineOut: Double? = null
+    private val _ui = MutableStateFlow(UiState(configured = api.isConfigured))
 
     /** 同一个码 3 秒内只提示一次，否则每帧识别都会触发一次 */
     private var lastRejectKey: String? = null
@@ -95,7 +107,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val token = prefs.token.first()
             val phone = prefs.phone.first()
-            // 设备编号不落盘：每次启动 App 都必须重新扫码
+            // 设备编号平时不落盘，只有「正在用水」这一次例外，见 restoreSession
             _ui.value = _ui.value.copy(
                 ready = true,
                 token = token,
@@ -104,6 +116,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // 未登录才需要图形验证码；已登录直接进首页，不必白跑一次请求。
             if (token.isBlank()) {
                 refreshCaptcha()
+            } else {
+                restoreSession(token)
             }
         }
     }
@@ -220,10 +234,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun logout() {
         viewModelScope.launch {
             prefs.clearSession()
+            // 会话记录也要清：换账号登录后不能把上一账号的水认领过来
+            sessionStore.clear()
             // 设备号也要清：否则重新登录后可能对着上一台设备直接点启动
             _ui.value = _ui.value.copy(
                 token = "",
                 deviceId = "",
+                deviceName = "",
+                session = null,
+                closed = false,
                 message = null,
                 messageIsError = false
             )
@@ -303,14 +322,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return when (val r = QrParser.parse(raw)) {
             is QrResult.Ok -> {
                 AppLog.i("Scan", "设备编号=${r.deviceId} host=${r.host.ifBlank { "(纯编号)" }}")
-                // 设备编号只活在本次会话，不写盘。
-                // deviceRunning 先归零，避免沿用上一台设备的状态，再向服务端核对。
-                _ui.value = _ui.value.copy(
+                // 设备编号平时只活在本次会话。名字要再请求一次，界面先显示编号。
+                // 扫的还是正在用水的那台设备时，名字和「已关闭」状态都保留，别抖一下。
+                val cur = _ui.value
+                val sameDevice = cur.session?.deviceId == r.deviceId
+                _ui.value = cur.copy(
                     deviceId = r.deviceId,
-                    deviceRunning = false,
+                    deviceName = if (sameDevice) cur.deviceName else "",
+                    closed = if (sameDevice) cur.closed else false,
                     message = null
                 )
-                syncDeviceStatus(r.deviceId)
+                if (!sameDevice || cur.deviceName.isBlank()) loadDeviceName(r.deviceId)
                 true
             }
 
@@ -332,17 +354,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 清除设备编号。
      *
      * 按业务要求：离开启动页后编号即作废，必须重新扫码，避免误用上一台设备。
+     *
+     * 注意只清「这次扫码选中的设备」，正在用水的那条会话记录不动 ——
+     * 水还在流，记录一清，杀进程回来就再也找不到了。
      */
     fun clearDevice() {
         AppLog.i("Device", "清除设备编号 did=${_ui.value.deviceId}")
-        // 基线跟着设备走：换设备后旧基线毫无意义，留着只会算出错误的差值
-        baselineOut = null
         _ui.value = _ui.value.copy(
             deviceId = "",
-            deviceRunning = false,
-            stopping = false,
-            settling = false,
-            lastUsageLiters = null,
+            deviceName = "",
+            closed = false,
             message = null,
             messageIsError = false
         )
@@ -352,19 +373,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val s = _ui.value
         if (s.deviceId.isBlank()) return note("请先扫码添加设备")
         if (s.busy || s.stopping) return
-        if (s.settling) return note("上一笔还在结算，请稍候")
-        if (s.deviceRunning) return note("设备已经在运行中")
+        // 同时只允许一条会话：水还在流的时候再去开另一台，只会让两边都对不上账
+        if (s.session != null) return note("有设备正在出水，请先在用水页关闭")
 
         viewModelScope.launch {
-            // 上一笔的用量结果不该带到这一笔上
-            _ui.value = _ui.value.copy(busy = true, message = null, lastUsageLiters = null)
+            _ui.value = _ui.value.copy(busy = true, message = null, closed = false)
             when (val r = api.devStart(s.token, s.deviceId)) {
                 is ApiResult.Ok -> {
-                    AppLog.i("Device", "启动成功 did=${s.deviceId}")
+                    // 等一下再读 gene.time：dev/start 返回时设备往往还没真正出水，
+                    // 立刻查会拿到 status=99 且没有 time，会话就失去了身份证。
+                    delay(SESSION_FINGERPRINT_DELAY_MS)
+                    // 读不到也不阻塞流程：sessionTime 为空时，对账只看出水状态。
+                    val status = api.devStatus(s.token, s.deviceId)
+                    val sessionTime = if (status is ApiResult.Ok) status.data.sessionTime else null
+                    val session = DeviceSession(
+                        deviceId = s.deviceId,
+                        deviceName = s.deviceName.takeIf { it.isNotBlank() },
+                        startedAt = System.currentTimeMillis(),
+                        sessionTime = sessionTime
+                    )
+                    // commit() 同步落盘：用户可能马上就杀进程，这条记录不能丢
+                    sessionStore.save(session)
+                    AppLog.i(
+                        "Device",
+                        "启动成功 did=${s.deviceId} time=${sessionTime ?: "(未取到)"}"
+                    )
                     _ui.value = _ui.value.copy(
                         busy = false,
-                        deviceRunning = true,
-                        message = "已启动，请在设备上使用",
+                        session = session,
+                        closed = false,
+                        message = null,
                         messageIsError = false
                     )
                 }
@@ -385,33 +423,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 关闭设备。
      *
-     * 关闭后账单由设备本体结算，App 侧只负责把出水停掉并刷新状态，
-     * 不做计时、不做账单查询 —— 和启动一样保持「启动器」的定位。
+     * 只负责把出水停掉、把会话记录清掉。用量和金额不在这里算 ——
+     * 账由服务端结算后从账单接口取（见 [syncBills]），所以关闭后等一会儿再同步一次。
      */
     fun stopDevice() {
         val s = _ui.value
-        if (s.deviceId.isBlank()) return note("请先扫码添加设备")
-        if (s.busy || s.stopping) return
+        val session = s.session ?: return note("没有正在运行的设备")
+        if (s.stopping) return
 
         viewModelScope.launch {
             _ui.value = _ui.value.copy(stopping = true, message = null)
-            when (val r = api.devEnd(s.token, s.deviceId)) {
+            when (val r = api.devEnd(s.token, session.deviceId)) {
                 is ApiResult.Ok -> {
-                    AppLog.i("Device", "关闭成功 did=${s.deviceId}")
-                    // 水是停了，但服务端还没结完账：这时候查 out 拿到的还是旧值，
-                    // 所以先标成「结算中」，由 awaitSettlement 轮询等结果。
+                    AppLog.i("Device", "关闭成功 did=${session.deviceId}")
+                    sessionStore.clear()
                     _ui.value = _ui.value.copy(
                         stopping = false,
-                        deviceRunning = false,
-                        settling = true,
-                        message = "已关闭，正在结算",
+                        session = null,
+                        closed = true,
+                        message = null,
                         messageIsError = false
                     )
-                    awaitSettlement(s.deviceId)
+                    // 服务端结算实测要 6 秒左右，等一等再拉，
+                    // 这样用户切到「用量」页就能直接看到这一笔，不用手动下拉。
+                    delay(BILL_SETTLE_DELAY_MS)
+                    syncBills()
                 }
 
                 is ApiResult.Err -> {
-                    AppLog.w("Device", "关闭失败 did=${s.deviceId}: ${r.message} code=${r.code}")
+                    AppLog.w(
+                        "Device",
+                        "关闭失败 did=${session.deviceId}: ${r.message} code=${r.code}"
+                    )
                     _ui.value = _ui.value.copy(
                         stopping = false,
                         message = r.message,
@@ -424,117 +467,85 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 向服务端核对设备出水状态。
+     * 补设备名。
      *
-     * 进入启动页时跑一次：用户可能从别处已经开过水，或者上次进程被杀导致本地状态丢了。
-     * 失败不打扰用户 —— 保持当前 UI，用户仍可以点按钮尝试。
+     * `/ui/app/dev/home` 响应里塞满了广告位，这里只取 `device.name`。
+     * 名字只是显示用，失败就不显示，不打扰用户。
      */
-    private fun syncDeviceStatus(expectedDeviceId: String) {
-        val s = _ui.value
-        if (expectedDeviceId.isBlank() || s.token.isBlank()) return
+    private fun loadDeviceName(deviceId: String) {
+        val token = _ui.value.token
+        if (deviceId.isBlank() || token.isBlank()) return
 
         viewModelScope.launch {
-            when (val r = api.devStatus(s.token, expectedDeviceId)) {
+            when (val r = api.devHome(token, deviceId)) {
                 is ApiResult.Ok -> {
-                    val out = r.data.outLiters
-                    // 第一次拿到有效累计值时记基线。后续轮询不能覆盖，
-                    // 否则每次查询都把起点往后推，差值永远是 0。
-                    if (baselineOut == null && out > 0.0) {
-                        baselineOut = out
-                        AppLog.i("Device", "用量基线 did=$expectedDeviceId out=$out")
-                    }
-                    AppLog.i(
-                        "Device",
-                        "状态同步 did=$expectedDeviceId running=${r.data.running} " +
-                            "raw=${r.data.rawStatus} out=$out"
-                    )
-                    // 设备号变了、或者用户正在点按钮，说明这次结果已经过期，丢掉
+                    val name = r.data.trim()
+                    if (name.isBlank()) return@launch
+                    AppLog.i("Device", "设备名 did=$deviceId → $name")
                     val cur = _ui.value
-                    if (cur.deviceId == expectedDeviceId && !cur.busy && !cur.stopping && !cur.settling) {
-                        _ui.value = cur.copy(deviceRunning = r.data.running)
+                    if (cur.deviceId != deviceId) return@launch
+                    _ui.value = cur.copy(deviceName = name)
+                    // 会话里也补上，下次冷启动才有名字可显示
+                    cur.session?.takeIf { it.deviceId == deviceId && it.deviceName != name }?.let {
+                        sessionStore.save(it.copy(deviceName = name))
                     }
                 }
 
-                is ApiResult.Err -> AppLog.w("Device", "状态查询失败: ${r.message}")
+                is ApiResult.Err -> AppLog.w("Device", "设备名获取失败: ${r.message}")
             }
         }
     }
 
     /**
-     * 关闭后等结算。
+     * 冷启动对账。
      *
-     * 服务端不是在 dev/end 返回时就结完账的：抓包实测关闭后 3 秒 `out` 还是旧值、
-     * `status` 还是 1，6 秒后才跳到新值并转成 99。所以每 2 秒查一次、最多 6 次，
-     * 一旦 status 变 99 或 out 有增长就收工。
+     * 进程可能在上一次用水途中被杀，磁盘里留了一条会话记录。这里向服务端核对：
+     * - 设备还在出水，且 `gene.time` 和记录里一致 → 还是同一次用水，认领回来
+     * - 已停水 / 时间对不上（说明这是新的一次）/ 设备对不上 → 记录作废，清掉
+     *
+     * 服务端没有「列出我的设备」接口（`/ui/app/master` 只有账号、`/acc/stat` 只有登录态），
+     * 所有设备接口都必须带 did，所以设备号只能从这个本地记录里取。
      */
-    private fun awaitSettlement(deviceId: String) {
-        viewModelScope.launch {
-            repeat(SETTLE_ATTEMPTS) { attempt ->
-                delay(SETTLE_INTERVAL_MS)
-                val token = _ui.value.token
-                if (token.isBlank()) return@launch
-
-                when (val r = api.devStatus(token, deviceId)) {
-                    is ApiResult.Ok -> {
-                        val out = r.data.outLiters
-                        val base = baselineOut
-                        val grew = base != null && out > base + 0.0005
-                        val settled = r.data.rawStatus == 99 || grew
-                        AppLog.i(
-                            "Device",
-                            "结算轮询 #${attempt + 1} status=${r.data.rawStatus} " +
-                                "out=$out base=$base settled=$settled"
-                        )
-                        if (settled) {
-                            finishSettlement(out)
-                            return@launch
-                        }
-                    }
-
-                    is ApiResult.Err -> AppLog.w("Device", "结算轮询失败: ${r.message}")
-                }
-            }
-            // 20 秒还没结完：不硬猜数字，把结论交回用户
-            AppLog.w("Device", "结算超时 did=$deviceId，本次未记账")
-            _ui.value = _ui.value.copy(
-                settling = false,
-                message = "已关闭，结算结果稍后可在设备上查看"
-            )
-        }
-    }
-
-    /** 结算完成：算差值、落账、把基线推到新值。 */
-    private fun finishSettlement(out: Double) {
-        val base = baselineOut
-        // 没有基线就算不出这一笔用了多少。宁可空着也不要把累计值当本次用量记进去。
-        if (base == null) {
-            AppLog.w("Device", "结算完成但没有基线 out=$out，本次未记账")
-            baselineOut = out
-            _ui.value = _ui.value.copy(
-                settling = false,
-                lastUsageLiters = null,
-                message = "已关闭，本次未能取到用量",
-                messageIsError = false
-            )
-            return
-        }
-
-        val used = if (out >= base) out - base else 0.0
-        // 这一笔的终点就是下一笔的起点
-        baselineOut = out
-        if (used > 0.0) ledger.append(liters = used)
-
+    private fun restoreSession(token: String) {
+        val saved = sessionStore.load() ?: return
         AppLog.i(
             "Device",
-            "结算完成 base=$base out=$out used=${String.format(Locale.CHINA, "%.3f", used)}L"
+            "发现未结算会话 did=${saved.deviceId} time=${saved.sessionTime ?: "(无)"}"
         )
-        _ui.value = _ui.value.copy(
-            settling = false,
-            lastUsageLiters = used,
-            ledgerRevision = if (used > 0.0) _ui.value.ledgerRevision + 1 else _ui.value.ledgerRevision,
-            message = if (used > 0.0) "已关闭，本次用量 ${liters(used)} 升" else "已关闭，本次未用水",
-            messageIsError = false
-        )
+
+        viewModelScope.launch {
+            when (val r = api.devStatus(token, saved.deviceId)) {
+                is ApiResult.Ok -> {
+                    val status = r.data
+                    // 任一方没有时间就只看出水状态，不硬判
+                    val sameSession = saved.sessionTime == null ||
+                        status.sessionTime == null ||
+                        saved.sessionTime == status.sessionTime
+                    AppLog.i(
+                        "Device",
+                        "对账 running=${status.running} status=${status.rawStatus} " +
+                            "time=${status.sessionTime ?: "(无)"} same=$sameSession"
+                    )
+                    if (status.running && sameSession) {
+                        _ui.value = _ui.value.copy(
+                            deviceId = saved.deviceId,
+                            deviceName = saved.deviceName.orEmpty(),
+                            session = saved,
+                            closed = false,
+                            sessionRestoreTick = _ui.value.sessionRestoreTick + 1
+                        )
+                        // 记录里没名字（启动那次请求失败）就补一次
+                        if (saved.deviceName.isNullOrBlank()) loadDeviceName(saved.deviceId)
+                    } else {
+                        AppLog.i("Device", "会话已失效，清除记录")
+                        sessionStore.clear()
+                    }
+                }
+
+                // 网络失败不销毁记录：下次启动还有机会认领，误清就等于把这笔水丢了
+                is ApiResult.Err -> AppLog.w("Device", "对账失败，保留记录: ${r.message}")
+            }
+        }
     }
 
     fun clearMessage() {

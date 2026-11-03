@@ -158,7 +158,26 @@ class WaterApi(
                 ?.optJSONObject("gene")
             val status = gene?.optInt("status", 0) ?: 0
             val out = gene?.optDouble("out", 0.0) ?: 0.0
-            DeviceStatus(running = status == 1, rawStatus = status, outLiters = out)
+            // gene.time 只在出水中下发，停水后字段直接消失
+            val time = gene?.optLong("time", 0L) ?: 0L
+            DeviceStatus(
+                running = status == 1,
+                rawStatus = status,
+                outLiters = out,
+                sessionTime = time.takeIf { it > 0L }
+            )
+        }
+    }
+
+    /** 设备主页，只取设备名。响应里带一堆广告字段，全部忽略。 */
+    suspend fun devHome(token: String, deviceId: String): ApiResult<String> = io {
+        val url = "$base/ui/app/dev/home/1?did=${encode(deviceId)}&apply=6"
+        val req = builder(url).header("Authorization", token).get().build()
+        call(req) { json ->
+            json.optJSONObject("data")
+                ?.optJSONObject("device")
+                ?.optString("name")
+                .orEmpty()
         }
     }
 
