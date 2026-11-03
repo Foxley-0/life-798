@@ -148,6 +148,21 @@ class BillStore(context: Context) {
     @Synchronized
     fun earliestAt(): Long? = read().minOfOrNull { it.at }
 
+    /** 有账单的年份，倒序。年份轮只列这些，空年份不进轮子。 */
+    @Synchronized
+    fun years(): List<Int> =
+        read().map { it.at.toLocalDate().year }.distinct().sortedDescending()
+
+    /** 指定年份里有账单的月份，倒序。月份轮只列这些。 */
+    @Synchronized
+    fun monthsOf(year: Int): List<Int> =
+        read()
+            .map { it.at.toLocalDate() }
+            .filter { it.year == year }
+            .map { it.monthValue }
+            .distinct()
+            .sortedDescending()
+
     // ---------------- 内部 ----------------
 
     private fun read(): List<BillRecord> {
