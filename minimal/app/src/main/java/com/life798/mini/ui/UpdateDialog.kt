@@ -191,7 +191,7 @@ private fun parseUpdateNotes(body: String): List<String> {
 
         val stripped = when {
             BULLET_PREFIXES.any { line.startsWith(it) } -> line.substring(2)
-            ORDERED_PREFIX.containsMatchIn(line) -> ORDERED_PREFIX.replace(line, "", 1)
+            ORDERED_PREFIX.containsMatchIn(line) -> ORDERED_PREFIX.replace(line, "")
             else -> return@forEach
         }
 
