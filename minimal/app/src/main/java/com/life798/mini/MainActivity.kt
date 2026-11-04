@@ -42,7 +42,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -54,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.life798.mini.core.AppLog
+import com.life798.mini.core.CameraController
 import com.life798.mini.core.UiPrefs
 import com.life798.mini.ui.AboutPage
 import com.life798.mini.ui.ReferencesScreen
@@ -95,7 +95,6 @@ import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.icon.extended.Scan
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
-import kotlinx.coroutines.flow.distinctUntilChanged
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -179,6 +178,18 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    /**
+     * 退到后台必须释放相机。
+     *
+     * CameraX 的 bindToLifecycle 绑的是 Activity 生命周期：STOPPED 时自动解绑、
+     * RESUMED 时**自动重绑**。不在这里释放，切出去再回来相机会自己亮 ——
+     * 违反「只有按钮能开」。
+     */
+    override fun onStop() {
+        super.onStop()
+        CameraController.release("应用退到后台")
+    }
 }
 
 private enum class Phase { LOADING, LOGIN, MAIN }
@@ -206,8 +217,21 @@ private fun MiniApp(
     val pagerState = rememberPagerState(initialPage = PAGE_SCAN) { PAGE_COUNT }
     val tabs = remember(pagerState, scope) { MainTabsPagerState(pagerState, scope) }
 
-    // 手指滑动时把高亮同步过来。点击动画期间 syncPage 会自己跳过。
-    LaunchedEffect(pagerState.currentPage) { tabs.syncPage() }
+    /**
+     * 手指滑动 / 点击动画结束时同步高亮，**同时释放相机**。
+     *
+     * 释放为什么挂在这里：底栏高亮跟手就靠这个 effect，
+     * 它读的是 Pager 外层的 pagerState，不在 LazyLayout 的 item 作用域里，
+     * 不受「预加载页不重组」影响。它失灵的话导航栏会一起坏 —— 从没发生过。
+     *
+     * 没有 delay：离开就释放，不给自己留缓冲。
+     */
+    LaunchedEffect(pagerState.currentPage) {
+        tabs.syncPage()
+        if (pagerState.currentPage != PAGE_SCAN) {
+            CameraController.release("滑到第 ${pagerState.currentPage} 页")
+        }
+    }
 
     var stack by rememberSaveable(stateSaver = RouteStackSaver) {
         mutableStateOf(emptyList<String>())
@@ -217,8 +241,6 @@ private fun MiniApp(
     var lastNavAt by remember { mutableLongStateOf(0L) }
     // 动画方向：push 往右进，pop 往左出（不能靠"目标是不是 TABS"判断）
     var navForward by remember { mutableStateOf(true) }
-    // 扫码页：返回时先停相机
-    var scanPauseTick by remember { mutableIntStateOf(0) }
     var confirmExitStart by remember { mutableStateOf(false) }
 
     /**
@@ -227,9 +249,13 @@ private fun MiniApp(
      * 不再「写 tab → 副作用监听到 tab 变了再滚」：那条链路中间隔着一次重组，
      * 连点时后一次点击会被 Pager 回写的状态覆盖，表现为点了没反应。
      * 现在点击直接推 [MainTabsPagerState.selectedPage] 并滚，只有一个源。
+     *
+     * 离开扫码页时在这里同步释放相机 —— 在动画开始之前就停，
+     * 不依赖 effect、不依赖重组、不依赖任何状态传播。
      */
     fun goTab(index: Int) {
         AppLog.i("Nav", "切换 tab → $index")
+        if (index != PAGE_SCAN) CameraController.release("点击底栏切到第 $index 页")
         tabs.animateToPage(index)
     }
 
@@ -354,8 +380,9 @@ private fun MiniApp(
 
             else -> {
                 // 扫码页：先把相机停掉再提示，否则用户以为返回没反应，
-                // 而且这 2 秒里扫到码会直接跳走
-                scanPauseTick++
+                // 而且这 2 秒里扫到码会直接跳走。
+                // 直接 release，不走 tick 中转 —— 少一层状态就少一处不同步
+                CameraController.release("按返回键")
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt < 2000L) {
                     (context as? Activity)?.finish()
@@ -384,7 +411,6 @@ private fun MiniApp(
                 onPush = ::push,
                 onBack = { requestBack() },
                 navForward = navForward,
-                scanPauseTick = scanPauseTick,
                 themeMode = themeMode,
                 accentMode = accentMode,
                 bottomBarStyle = bottomBarStyle,
@@ -443,7 +469,6 @@ private fun MainScaffold(
     onPush: (Route) -> Unit,
     onBack: () -> Unit,
     navForward: Boolean,
-    scanPauseTick: Int,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -512,7 +537,6 @@ private fun MainScaffold(
                         onPush = onPush,
                         onBack = onBack,
                         navForward = navForward,
-                        scanPauseTick = scanPauseTick,
                         themeMode = themeMode,
                         accentMode = accentMode,
                         bottomBarStyle = bottomBarStyle,
@@ -595,7 +619,6 @@ private fun MainContent(
     onPush: (Route) -> Unit,
     onBack: () -> Unit,
     navForward: Boolean,
-    scanPauseTick: Int,
     themeMode: Int,
     accentMode: Int,
     bottomBarStyle: Int,
@@ -603,29 +626,6 @@ private fun MainContent(
     onAccentMode: (Int) -> Unit,
     onBottomBarStyle: (Int) -> Unit
 ) {
-    /**
-     * 扫码页可见性。
-     *
-     * **不能在 Pager 的 page content lambda 里直接读 `pagerState.currentPage`。**
-     * Compose 的 LazyLayout 对视口外的 item 只组合、不重组，
-     * `beyondViewportPageCount = 1` 让第 0 页滑到「用量」时仍然活着，
-     * 但它的 content lambda 不再执行 —— 读到的永远是初始值，
-     * 于是「离开就解绑」一次都没生效，要等滑到「设置」被销毁才解绑。
-     *
-     * 这里用 snapshotFlow 在 Pager 外层观察，协程持续运行、不依赖重组，
-     * 再通过一个 State 单向下发；ScanScreen 内部也用 snapshotFlow 消费，
-     * 整条链路不经过任何重组。
-     */
-    val scanActive = remember { mutableStateOf(pagerState.currentPage == PAGE_SCAN) }
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.currentPage == PAGE_SCAN }
-            .distinctUntilChanged()
-            .collect {
-                scanActive.value = it
-                AppLog.i("Scan", "扫码页可见性 → $it")
-            }
-    }
-
     AnimatedContent(
         targetState = current ?: Route.TABS.name,
         transitionSpec = {
@@ -710,10 +710,6 @@ private fun MainContent(
                                     )
                                 },
                                 onResumeUsing = { onPush(Route.USING) },
-                                pauseTick = scanPauseTick,
-                                // 只有真正停在第 0 页才开相机；滑到用量/设置立刻解绑。
-                                // 传 lambda 而不是 Boolean —— 本页不重组，值变化传不进来
-                                isActive = { scanActive.value },
                             )
 
                             1 -> UsageScreen(
