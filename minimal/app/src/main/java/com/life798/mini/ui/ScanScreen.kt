@@ -80,7 +80,7 @@ import kotlinx.coroutines.sync.withLock
  * 没有自动恢复：滑走再滑回来，显示的是浮层，要扫必须重新点按钮。
  *
  * 三个必须做对的点（写错的话现象和 ZXing 版本一模一样）：
- * 1. ImageAnalysis 分辨率必须显式设成 1920×1080 —— 默认只有 640×480，小码照样扫不出
+ * 1. ImageAnalysis 分辨率必须显式设成 1280×720 —— 默认只有 640×480，小码照样扫不出
  * 2. 每帧必须 imageProxy.close()，漏一次管线就永久卡死
  * 3. 预览用 FIT_CENTER 而不是 FILL_CENTER，否则屏幕边缘「看得见却扫不到」
  */
@@ -203,10 +203,16 @@ fun ScanScreen(
         camLock.withLock {
             if (!CameraController.isScanning() || CameraController.isBound()) return@withLock
 
-            // Preview 与 ImageAnalysis 必须共用同一个 selector，
-            // 否则「屏幕看到的画面」和「实际分析的画面」不是同一块区域。
-            // 优先 16:9：设备给 4:3（1920x1440）时铺满竖屏会裁掉太多
-            val selector = ResolutionSelector.Builder()
+            // Preview 和 ImageAnalysis **故意用不同的分辨率**。
+            //
+            // 原来两者共用 1920×1080：画面是清楚了，但 ML Kit 单帧要处理
+            // 200 万像素，低端机 1~3 秒。而这个帧率直接决定了两件事：
+            //   ① 扫码响应速度
+            //   ② 释放相机时 unbindAll 要等多久（它要等 in-flight 的帧结束）
+            //
+            // 720p 比当年 ZXing 时代的 640×480 还大 4 倍，扫 20~30cm 的码足够。
+            // 预览仍走 1080p，用户看到的画面不变。
+            val previewSelector = ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
                 .setResolutionStrategy(
                     ResolutionStrategy(
@@ -216,15 +222,25 @@ fun ScanScreen(
                 )
                 .build()
 
+            val analysisSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                .setResolutionStrategy(
+                    ResolutionStrategy(
+                        Size(1280, 720),
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                    )
+                )
+                .build()
+
             val preview = Preview.Builder()
-                .setResolutionSelector(selector)
+                .setResolutionSelector(previewSelector)
                 .build()
                 .also {
                     it.surfaceProvider = previewView.surfaceProvider
                 }
 
             val analysis = ImageAnalysis.Builder()
-                .setResolutionSelector(selector)
+                .setResolutionSelector(analysisSelector)
                 // 只保留最新帧，避免积压导致延迟越来越高
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
@@ -268,8 +284,11 @@ fun ScanScreen(
                         handling.set(false)
                         AppLog.w("Scan", "识别失败: ${e.message}")
                     }
-                    // 必须关，否则管线会卡死
-                    .addOnCompleteListener { proxy.close() }
+                    // 必须关，否则管线会卡死。
+                    // 回调显式指定 analysisExecutor：默认走主线程，切页时 Compose
+                    // 转场动画把主线程占满，这个 close 就得排队 —— 而 unbindAll
+                    // 正等着它。
+                    .addOnCompleteListener(analysisExecutor) { proxy.close() }
             }
 
             provider.unbindAll()
@@ -279,7 +298,14 @@ fun ScanScreen(
                 preview,
                 analysis
             )
-            CameraController.markBound(provider)
+            CameraController.markBound(provider) {
+                // 同步断开两条管线。必须在 unbindAll 之前做：
+                // clearAnalyzer 让 CameraX 停止往 analyzer 送帧（不再等 ML Kit 处理完），
+                // setSurfaceProvider(null) 让 Preview 立刻放掉 Surface。
+                // 这两个调用返回后画面就没了，用户看到的是「相机立刻关掉」。
+                runCatching { analysis.clearAnalyzer() }
+                runCatching { preview.setSurfaceProvider(null) }
+            }
 
             if (!CameraController.isScanning()) {
                 CameraController.release("绑定后已被释放")

@@ -1,5 +1,6 @@
 package com.life798.mini.core
 
+import android.os.SystemClock
 import androidx.camera.lifecycle.ProcessCameraProvider
 import com.life798.mini.BuildConfig
 import java.util.concurrent.atomic.AtomicBoolean
@@ -16,12 +17,6 @@ import kotlinx.coroutines.flow.StateFlow
  *   [release]        离开扫描页 / 按返回 / 页面销毁 / 退到后台
  *
  * 没有「自动恢复」这回事：离开之后再想扫，必须重新点按钮。
- *
- * 为什么解绑是一个同步方法而不是一个状态：
- * 前两版把「该不该开相机」做成 Compose 状态往下传，链路要经过
- * pagerState → snapshotFlow → State → 参数 → effect 五跳，任何一跳断了
- * 都表现为「相机不释放」，且无法从现象判断断在哪。相机是独占资源，
- * 页面切走那一刻就该还回去，不该等状态传播。
  */
 object CameraController {
 
@@ -29,11 +24,17 @@ object CameraController {
     private val bound = AtomicBoolean(false)
 
     /**
-     * 是否正在扫描。UI 用它决定浮层显不显示，绑定逻辑用它决定绑不绑。
+     * 绑定后注册的「断开 use case」回调：停分析 + 断预览。
      *
-     * 用 StateFlow 而不是 Compose State：它只是给界面看的一个镜像，
-     * 真正的释放动作在 [release] 里同步完成，不依赖这个值被谁读到。
+     * 为什么要单独存一份：`unbindAll()` 只是解除绑定，相机硬件还要等
+     * ImageAnalysis 的 analyzer 停止送帧、Preview 的 Surface 释放才真正关闭。
+     * 而 analyzer 里跑着 ML Kit，一帧要几百毫秒到几秒，`proxy.close()`
+     * 挂在识别完成的回调上 —— 不主动断开，`unbindAll()` 就得一直等。
+     *
+     * 这两个调用是纯同步的，做完画面立刻消失，不用等 CameraX 的异步关闭。
      */
+    private var detachUseCases: (() -> Unit)? = null
+
     private val _scanning = MutableStateFlow(false)
     val scanning: StateFlow<Boolean> = _scanning
 
@@ -44,28 +45,49 @@ object CameraController {
     }
 
     /**
-     * 释放相机。调用即生效 —— 同步 unbindAll，不排队、不等协程。
+     * 释放相机。调用即生效 —— 不排队、不等协程。
      *
-     * 幂等：没绑定过就直接返回，不刷日志。
+     * 三步都带毫秒计时，慢的时候能一眼看出卡在哪：
+     *   已断开 use case +Nms   ← 卡这里说明 ML Kit 还在处理帧
+     *   unbindAll +Nms ok=     ← 卡这里说明是 CameraX/驱动的问题
+     *
+     * **bound 只在解绑成功后才清**：以前是先 getAndSet(false) 再操作，
+     * 一旦那次 unbindAll 没真正生效，后续所有 release（包括页面销毁时那次）
+     * 都会因为 bound 已经是 false 直接返回，再也没有重试机会。
      */
     fun release(reason: String) {
         _scanning.value = false
 
-        if (!bound.getAndSet(false)) return
+        if (!bound.get()) return
 
-        val p = provider.get()
-        if (p == null) {
-            AppLog.w(TAG, "释放跳过：provider 未注册（$reason）")
-            return
+        val t0 = SystemClock.elapsedRealtime()
+
+        runCatching { detachUseCases?.invoke() }
+            .onFailure { AppLog.w(TAG, "断开 use case 异常：${it.message}") }
+        detachUseCases = null
+        AppLog.i(TAG, "已断开 use case +${SystemClock.elapsedRealtime() - t0}ms")
+
+        val ok = runCatching { provider.get()?.unbindAll() }.isSuccess
+        val elapsed = SystemClock.elapsedRealtime() - t0
+        AppLog.i(TAG, "unbindAll +${elapsed}ms ok=$ok")
+
+        if (ok) {
+            bound.set(false)
+            AppLog.i(TAG, "相机已释放：$reason（+${elapsed}ms）")
+        } else {
+            // 保留 bound，下次 release 还能再试一次
+            AppLog.w(TAG, "解绑失败，保留 bound 以便重试（$reason）")
         }
-        runCatching { p.unbindAll() }
-            .onSuccess { AppLog.i(TAG, "相机已释放：$reason") }
-            .onFailure { AppLog.w(TAG, "释放异常：${it.message}（$reason）") }
     }
 
-    /** 绑定成功后由 ScanScreen 调用，release 靠它拿到句柄。 */
-    fun markBound(p: ProcessCameraProvider) {
+    /**
+     * 绑定成功后由 ScanScreen 调用。
+     *
+     * @param detach 停分析 + 断预览的同步回调，release 时先于 unbindAll 执行。
+     */
+    fun markBound(p: ProcessCameraProvider, detach: () -> Unit) {
         provider.set(p)
+        detachUseCases = detach
         bound.set(true)
         AppLog.i(TAG, "相机已绑定")
     }
