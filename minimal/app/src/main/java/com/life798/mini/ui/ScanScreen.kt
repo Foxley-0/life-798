@@ -62,6 +62,7 @@ import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
@@ -98,6 +99,24 @@ fun ScanScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    /**
+     * 关帧专用执行器。
+     *
+     * 为什么不直接用 analysisExecutor：页面销毁时 onDispose 会 shutdown 它，
+     * 而这一刻可能还有一帧挂在 ML Kit 里没回调完。等它回调时再往已关闭的
+     * 线程池投递，会抛 RejectedExecutionException —— 抛在 ML Kit 的内部线程上，
+     * 没人接，直接崩。
+     *
+     * 线程池还活着 → 丢进去异步关；已经关了 → 就在当前线程同步关。
+     * 两条路都保证 proxy.close() 一定被执行，管线不会卡死。
+     */
+    val closeExecutor = remember {
+        Executor { runnable ->
+            runCatching { analysisExecutor.execute(runnable) }
+                .onFailure { runnable.run() }
+        }
+    }
 
     /** 是否在扫描。浮层的显示条件就是它的反 —— 不再单独维护 showCover。 */
     val scanning by CameraController.scanning.collectAsState()
@@ -285,10 +304,10 @@ fun ScanScreen(
                         AppLog.w("Scan", "识别失败: ${e.message}")
                     }
                     // 必须关，否则管线会卡死。
-                    // 回调显式指定 analysisExecutor：默认走主线程，切页时 Compose
+                    // 回调显式指定 closeExecutor：默认走主线程，切页时 Compose
                     // 转场动画把主线程占满，这个 close 就得排队 —— 而 unbindAll
                     // 正等着它。
-                    .addOnCompleteListener(analysisExecutor) { proxy.close() }
+                    .addOnCompleteListener(closeExecutor) { proxy.close() }
             }
 
             provider.unbindAll()
