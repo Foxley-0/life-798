@@ -17,6 +17,12 @@ data class UpdateInfo(
     val apkUrl: String?,
     /** 发布日期，形如 "2026-11-03"。 */
     val publishedAt: String,
+    /**
+     * release 正文（markdown）。弹窗里按列表行解析成更新说明。
+     *
+     * 老版本 release 的正文是固定模板（功能清单），解析不出条目时弹窗会隐藏说明框。
+     */
+    val body: String = "",
 )
 
 /**

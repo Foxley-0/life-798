@@ -148,43 +148,29 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "out/798-mini-${GITHUB_REF_NAME}-release.apk"
           ls -la out/
 
+      # 发布正文来自仓库根的 RELEASE_NOTES.md —— 每次发版前改它，
+      # 写的是「这一版改了什么」，而不是「这个 App 是什么」。
+      # App 的更新弹窗直接解析这份正文，所以格式要守住：
+      # 条目一律以 "- " 开头，一条一行；不要写段落。
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: .
+        run: |
+          NOTES="$GITHUB_WORKSPACE/RELEASE_NOTES.md"
+          if [ -s "$NOTES" ]; then
+            echo "使用 RELEASE_NOTES.md（$(wc -l < "$NOTES") 行）"
+            exit 0
+          fi
+          echo "::warning::RELEASE_NOTES.md 缺失或为空，使用最小正文"
+          printf '%s\n' "**798 小助手 ${GITHUB_REF_NAME}**" "" "详见仓库提交记录。" > "$NOTES"
+
       - name: Publish Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           name: 798 小助手 ${{ github.ref_name }}
           fail_on_unmatched_files: false
-          body: |
-            **798 小助手 ${{ github.ref_name }}**
-
-            慧生活798 的极度精简客户端，只做一件事：扫码启动用水设备。
-
-            ## 功能
-            - 手机号 + 图形验证码 + 短信验证码登录
-            - 扫描设备二维码，自动提取设备编号与设备名
-            - 一键启动设备
-            - 用水页显示出水状态与开始时刻，一键关闭
-            - 用量账本：按月分组、按天分组的流水、本月/本年合计与每日趋势
-            - 冷启动自动认领还在出水的设备（进程被杀也不会丢）
-
-            ## 不提供
-            钱包、积分、多任务签到、多账户、小部件、快捷磁贴、消费金额统计、推送、广告、埋点、崩溃上报。
-
-            ## 关于用量数据
-            账本里每一笔都来自服务端账单，含用水量与金额，本地只做镜像缓存，
-            所以换设备、重装 App 后历史账目仍会同步回来。
-            启动了但没出水的 0 元空账单会被自动过滤。
-
-            ## 安装
-            下载下方 APK 直接安装。需 Android 8.0 及以上，首次使用需登录。
-
-            两个包功能相同，任选其一：
-            - `798-mini-<版本>.apk`：debug 构建，体积较大，兼容性最稳
-            - `798-mini-<版本>-release.apk`：R8 优化，体积约为前者六分之一
-
-            ## 说明
-            - 非官方项目，与服务提供方无关
-            - 请仅使用你本人有权访问的账户和设备
+          body_path: RELEASE_NOTES.md
           files: |
             minimal/out/*.apk
           draft: false

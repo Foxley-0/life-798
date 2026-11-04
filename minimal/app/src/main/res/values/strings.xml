@@ -12,8 +12,4 @@
     <string name="link_open_failed">没有可打开链接的应用</string>
 
     <string name="about_check_update">检查更新</string>
-    <string name="update_dialog_title">发现新版本</string>
-    <string name="update_later">以后再说</string>
-    <string name="update_skip_version">不再提醒此版本</string>
-    <string name="update_download">去下载</string>
 </resources>

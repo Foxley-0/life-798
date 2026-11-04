@@ -38,10 +38,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
@@ -63,10 +63,14 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * 扫码页：CameraX + ML Kit，**分析整帧**。
@@ -93,8 +97,11 @@ fun ScanScreen(
     /**
      * 本页是否为当前可见页。false 时立刻解绑相机（指示灯灭、不再耗电），
      * 滑回来会自动重新绑定，不用再点一次「开始扫描」。
+     *
+     * 用 lambda 而不是 Boolean：Pager 的预加载页不会重组，
+     * 参数变化传不进来（见下方相机段落的注释），必须让它自己来读。
      */
-    isActive: Boolean = true
+    isActive: () -> Boolean = { true }
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -105,12 +112,22 @@ fun ScanScreen(
     var showCover by remember { mutableStateOf(true) }
     var permissionDenied by remember { mutableStateOf(false) }
     var scanning by remember { mutableStateOf(false) }
-    var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
 
     // 跨线程标志：用 AtomicBoolean，避免在分析线程里读 Compose State
     val alive = remember { AtomicBoolean(true) }
     val handling = remember { AtomicBoolean(false) }
     val paused = remember { AtomicBoolean(false) }
+
+    /**
+     * 相机句柄与绑定状态**故意不用 Compose State**。
+     *
+     * 绑定/解绑由协程直接驱动，不经过「状态变化 → 重组 → 读新值」这条链 ——
+     * Pager 的预加载页不参与重组，任何走重组的开关都会卡在初始值上。
+     * 用 State 只会让人误以为它能驱动 UI。
+     */
+    val providerRef = remember { AtomicReference<ProcessCameraProvider?>(null) }
+    val bound = remember { AtomicBoolean(false) }
+    val camLock = remember { Mutex() }
 
     var permissionGranted by remember {
         mutableStateOf(
@@ -145,7 +162,8 @@ fun ScanScreen(
         alive.set(true)
         onDispose {
             alive.set(false)
-            runCatching { cameraProvider?.unbindAll() }
+            runCatching { providerRef.get()?.unbindAll() }
+            bound.set(false)
             runCatching { scanner.close() }
             analysisExecutor.shutdown()
             AppLog.i("Scan", "离开扫码页，相机与识别器已释放")
@@ -198,106 +216,143 @@ fun ScanScreen(
         }
     }
 
-    // 相机绑定：Preview + ImageAnalysis
-    LaunchedEffect(scanning, permissionGranted, lifecycleOwner, isActive) {
-        // 滑到别的页：解绑相机。之前只靠 DisposableEffect 的 onDispose，
-        // 而 Pager 设了 beyondViewportPageCount = 1，第 0 页要到「设置」才被回收，
-        // 于是滑到「用量」相机还在跑 —— 就是「到设置才停」的原因。
-        // 150ms 缓冲：快速来回滑时 effect 会被取消，不会真解绑。
-        if (!isActive) {
-            delay(150)
-            runCatching { cameraProvider?.unbindAll() }
-            AppLog.i("Scan", "离开扫码页，相机已解绑")
-            return@LaunchedEffect
-        }
-        if (!scanning || !permissionGranted) return@LaunchedEffect
+    /**
+     * 相机状态的唯一入口。
+     *
+     * 判断条件每次现读：可见性、是否点了开始、权限。
+     * 三者任意一个变化都由各自的触发源调进来，这里只负责「该绑就绑、该解就解」。
+     * Mutex 串行化，避免可见性变化和点按钮同时进来把 provider 绑两遍。
+     */
+    suspend fun syncCamera() {
+        camLock.withLock {
+            val want = isActive() && scanning && permissionGranted
 
-        val provider = awaitCameraProvider(context)
-        cameraProvider = provider
+            if (!want) {
+                val was = bound.getAndSet(false)
+                runCatching { providerRef.get()?.unbindAll() }
+                if (was) AppLog.i("Scan", "相机已解绑")
+                return@withLock
+            }
+            if (bound.get()) return@withLock
 
-        // Preview 与 ImageAnalysis 必须共用同一个 selector，
-        // 否则「屏幕看到的画面」和「实际分析的画面」不是同一块区域。
-        // 优先 16:9：设备给 4:3（1920x1440）时铺满竖屏会裁掉太多
-        val selector = ResolutionSelector.Builder()
-            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
-            .setResolutionStrategy(
-                ResolutionStrategy(
-                    Size(1920, 1080),
-                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+            val provider = providerRef.get() ?: awaitCameraProvider(context).also {
+                providerRef.set(it)
+            }
+
+            // Preview 与 ImageAnalysis 必须共用同一个 selector，
+            // 否则「屏幕看到的画面」和「实际分析的画面」不是同一块区域。
+            // 优先 16:9：设备给 4:3（1920x1440）时铺满竖屏会裁掉太多
+            val selector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                .setResolutionStrategy(
+                    ResolutionStrategy(
+                        Size(1920, 1080),
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                    )
                 )
-            )
-            .build()
+                .build()
 
-        val preview = Preview.Builder()
-            .setResolutionSelector(selector)
-            .build()
-            .also {
-                it.surfaceProvider = previewView.surfaceProvider
-            }
+            val preview = Preview.Builder()
+                .setResolutionSelector(selector)
+                .build()
+                .also {
+                    it.surfaceProvider = previewView.surfaceProvider
+                }
 
-        val analysis = ImageAnalysis.Builder()
-            .setResolutionSelector(selector)
-            // 只保留最新帧，避免积压导致延迟越来越高
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
+            val analysis = ImageAnalysis.Builder()
+                .setResolutionSelector(selector)
+                // 只保留最新帧，避免积压导致延迟越来越高
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
 
-        analysis.setAnalyzer(analysisExecutor) { proxy ->
-            // 暂停 / 已处理过结果 → 直接丢弃这一帧
-            if (paused.get() || handling.get()) {
-                proxy.close()
-                return@setAnalyzer
-            }
-            val media = proxy.image
-            if (media == null) {
-                proxy.close()
-                return@setAnalyzer
-            }
-            val input = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-            scanner.process(input)
-                .addOnSuccessListener { barcodes ->
-                    val barcode = barcodes.firstOrNull()
-                    val text = barcode?.rawValue
-                    if (text.isNullOrBlank()) return@addOnSuccessListener
-                    // 抢到处理权才继续，避免同一帧回调多次
-                    if (!handling.compareAndSet(false, true)) return@addOnSuccessListener
-                    val corners = barcode.cornerPoints
-                        ?.joinToString { "(${it.x.toInt()},${it.y.toInt()})" }
-                        .orEmpty()
-                    AppLog.i("Scan", "识别到: ${text.take(100)} 码位置=$corners")
-                    mainHandler.post {
-                        if (!alive.get()) {
-                            handling.set(false)
-                            return@post
-                        }
-                        if (currentOnDecoded(text)) {
-                            currentOnScanned()
-                        } else {
-                            handling.set(false)
+            analysis.setAnalyzer(analysisExecutor) { proxy ->
+                // 暂停 / 已处理过结果 → 直接丢弃这一帧
+                if (paused.get() || handling.get()) {
+                    proxy.close()
+                    return@setAnalyzer
+                }
+                val media = proxy.image
+                if (media == null) {
+                    proxy.close()
+                    return@setAnalyzer
+                }
+                val input = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
+                scanner.process(input)
+                    .addOnSuccessListener { barcodes ->
+                        val barcode = barcodes.firstOrNull()
+                        val text = barcode?.rawValue
+                        if (text.isNullOrBlank()) return@addOnSuccessListener
+                        // 抢到处理权才继续，避免同一帧回调多次
+                        if (!handling.compareAndSet(false, true)) return@addOnSuccessListener
+                        val corners = barcode.cornerPoints
+                            ?.joinToString { "(${it.x.toInt()},${it.y.toInt()})" }
+                            .orEmpty()
+                        AppLog.i("Scan", "识别到: ${text.take(100)} 码位置=$corners")
+                        mainHandler.post {
+                            if (!alive.get()) {
+                                handling.set(false)
+                                return@post
+                            }
+                            if (currentOnDecoded(text)) {
+                                currentOnScanned()
+                            } else {
+                                handling.set(false)
+                            }
                         }
                     }
-                }
-                .addOnFailureListener { e ->
-                    handling.set(false)
-                    AppLog.w("Scan", "识别失败: ${e.message}")
-                }
-                // 必须关，否则管线会卡死
-                .addOnCompleteListener { proxy.close() }
+                    .addOnFailureListener { e ->
+                        handling.set(false)
+                        AppLog.w("Scan", "识别失败: ${e.message}")
+                    }
+                    // 必须关，否则管线会卡死
+                    .addOnCompleteListener { proxy.close() }
+            }
+
+            provider.unbindAll()
+            provider.bindToLifecycle(
+                lifecycleOwner,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                analysis
+            )
+            bound.set(true)
+
+            val info = analysis.resolutionInfo?.resolution
+            AppLog.i(
+                "Scan",
+                "相机已绑定 分析分辨率=${info?.let { "${it.width}x${it.height}" } ?: "未知"} " +
+                    "预览容器=${previewView.width}x${previewView.height}"
+            )
         }
+    }
 
-        provider.unbindAll()
-        provider.bindToLifecycle(
-            lifecycleOwner,
-            CameraSelector.DEFAULT_BACK_CAMERA,
-            preview,
-            analysis
-        )
+    // 触发源一：用户点「点击启动扫描」或权限刚授予
+    LaunchedEffect(scanning, permissionGranted) {
+        syncCamera()
+    }
 
-        val info = analysis.resolutionInfo?.resolution
-        AppLog.i(
-            "Scan",
-            "相机已绑定 分析分辨率=${info?.let { "${it.width}x${it.height}" } ?: "未知"} " +
-                "预览容器=${previewView.width}x${previewView.height}"
-        )
+    /**
+     * 触发源二：页面可见性。
+     *
+     * **必须用 snapshotFlow，不能靠 isActive 参数变化触发 LaunchedEffect 重启。**
+     * 原因：MainActivity 里 `isActive = pagerState.currentPage == 0` 是在
+     * HorizontalPager 的 page content lambda 里读的，而 Compose 的 LazyLayout
+     * 对「视口外」的 item 只组合、不重组 —— beyondViewportPageCount = 1 让第 0 页
+     * 滑到「用量」时仍然活着（DisposableEffect 不触发），但 content lambda 不再执行，
+     * 参数永远停在初始值 true。于是「离开就解绑」一次都没生效，
+     * 要等滑到「设置」超出预加载范围被销毁，才走 onDispose 解绑。
+     *
+     * snapshotFlow 在协程里持续读，不依赖重组，能收到每一次变化。
+     */
+    LaunchedEffect(Unit) {
+        snapshotFlow { isActive() }
+            .conflate()
+            .collect { active ->
+                // 150ms 缓冲：快速来回滑时不会真解绑
+                if (!active) delay(150)
+                // 不直接用 active：delay 期间可能已经滑回来了，syncCamera 会重新读一次
+                syncCamera()
+            }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

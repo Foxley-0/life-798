@@ -42,6 +42,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -94,6 +95,7 @@ import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.icon.extended.Scan
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import kotlinx.coroutines.flow.distinctUntilChanged
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -601,6 +603,29 @@ private fun MainContent(
     onAccentMode: (Int) -> Unit,
     onBottomBarStyle: (Int) -> Unit
 ) {
+    /**
+     * 扫码页可见性。
+     *
+     * **不能在 Pager 的 page content lambda 里直接读 `pagerState.currentPage`。**
+     * Compose 的 LazyLayout 对视口外的 item 只组合、不重组，
+     * `beyondViewportPageCount = 1` 让第 0 页滑到「用量」时仍然活着，
+     * 但它的 content lambda 不再执行 —— 读到的永远是初始值，
+     * 于是「离开就解绑」一次都没生效，要等滑到「设置」被销毁才解绑。
+     *
+     * 这里用 snapshotFlow 在 Pager 外层观察，协程持续运行、不依赖重组，
+     * 再通过一个 State 单向下发；ScanScreen 内部也用 snapshotFlow 消费，
+     * 整条链路不经过任何重组。
+     */
+    val scanActive = remember { mutableStateOf(pagerState.currentPage == PAGE_SCAN) }
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.currentPage == PAGE_SCAN }
+            .distinctUntilChanged()
+            .collect {
+                scanActive.value = it
+                AppLog.i("Scan", "扫码页可见性 → $it")
+            }
+    }
+
     AnimatedContent(
         targetState = current ?: Route.TABS.name,
         transitionSpec = {
@@ -686,8 +711,9 @@ private fun MainContent(
                                 },
                                 onResumeUsing = { onPush(Route.USING) },
                                 pauseTick = scanPauseTick,
-                                // 只有真正停在第 0 页才开相机；滑到用量/设置立刻解绑
-                                isActive = pagerState.currentPage == 0,
+                                // 只有真正停在第 0 页才开相机；滑到用量/设置立刻解绑。
+                                // 传 lambda 而不是 Boolean —— 本页不重组，值变化传不进来
+                                isActive = { scanActive.value },
                             )
 
                             1 -> UsageScreen(
@@ -721,7 +747,6 @@ private fun MainContent(
         preparing = state.updatePreparing,
         onDownload = vm::downloadUpdate,
         onLater = vm::dismissUpdate,
-        onSkipVersion = vm::skipUpdateVersion,
     )
 
     // 探测到可用地址后打开浏览器。地址是一次性信号，用完立刻清掉，

@@ -11,7 +11,6 @@ import com.life798.mini.core.BillStore
 import com.life798.mini.core.DeviceSession
 import com.life798.mini.core.DeviceSessionStore
 import com.life798.mini.core.Prefs
-import com.life798.mini.core.UiPrefs
 import com.life798.mini.core.UpdateInfo
 import com.life798.mini.core.isNewerVersion
 import com.life798.mini.net.GithubMirror
@@ -120,7 +119,6 @@ data class UiState(
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val prefs = Prefs(app)
-    private val uiPrefs = UiPrefs(app)
     private val api = WaterApi()
     private val billStore = BillStore(app)
 
@@ -725,18 +723,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             )
             val result = updateApi.latest()
             _ui.value = when {
-                // 有新版本 → 交给弹窗；但用户选过「不再提醒此版本」的就不再弹
+                // 有新版本 → 交给弹窗
                 result is ApiResult.Ok &&
                     isNewerVersion(result.data.version, BuildConfig.VERSION_NAME) -> {
-                    val skipped = uiPrefs.skippedUpdateVersion == result.data.version
                     AppLog.i(
                         "Update",
-                        "发现新版本 ${result.data.version}（当前 ${BuildConfig.VERSION_NAME}）" +
-                            if (skipped) "，已被用户跳过" else ""
+                        "发现新版本 ${result.data.version}（当前 ${BuildConfig.VERSION_NAME}）"
                     )
                     _ui.value.copy(
                         updateChecking = false,
-                        updateInfo = if (skipped) null else result.data,
+                        updateInfo = result.data,
                         // 重新检查到新版本时把「以后再说」的开关复位，
                         // 否则用户上次关掉之后，再点检查就永远不弹了
                         updateDismissed = false,
@@ -774,18 +770,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(updateDismissed = true)
     }
 
-    /** 「不再提醒此版本」：写进 UiPrefs，这个版本号以后不再弹。 */
-    fun skipUpdateVersion() {
-        val v = _ui.value.updateInfo?.version ?: return
-        uiPrefs.skippedUpdateVersion = v
-        AppLog.i("Update", "已跳过版本 $v")
-        _ui.value = _ui.value.copy(updateDismissed = true)
-    }
-
     /**
-     * 「去下载」：先探测哪条线路能通，再把地址交给界面打开。
+     * 「立即更新」：先探测哪条线路能通，再把地址交给界面打开。
      *
-     * 探测上限约 5 秒（两个镜像各 2.5 秒）；全挂就退回 release 页面，
+     * 探测上限约 12 秒（原链 6 秒 + ghfast.top 6 秒）；全挂就退回 release 页面，
      * 至少让用户能看到发生了什么，而不是一个点了没反应的按钮。
      */
     fun downloadUpdate() {

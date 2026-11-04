@@ -82,6 +82,7 @@ class UpdateApi(private val repo: String = DEFAULT_REPO) {
                         pageUrl = json.optString("html_url"),
                         apkUrl = apkUrl,
                         publishedAt = json.optString("published_at").take(10),
+                        body = json.optString("body"),
                     )
                 )
             }
