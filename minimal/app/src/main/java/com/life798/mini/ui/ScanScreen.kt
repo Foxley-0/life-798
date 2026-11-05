@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Size
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -20,16 +21,21 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -39,12 +45,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -57,10 +64,19 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.CameraController
+import com.life798.mini.core.DeviceEntry
+import com.life798.mini.core.DevicePrefs
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Close
+import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -91,8 +107,12 @@ fun ScanScreen(
     onEnter: () -> Unit,
     onDecoded: (String) -> Boolean,
     onScanned: () -> Unit,
+    /** 从设备列表点进来：同样解析编号，但**不记账**（不是真的扫过） */
+    onPickDevice: (String) -> Boolean = onDecoded,
     /** 有设备正在出水时，浮层上多一个「回到用水界面」的入口 */
     onResumeUsing: () -> Unit = {},
+    /** 底栏占掉的高度。设备列表底部要避开它，否则最后一项会被胶囊压住 */
+    bottomInset: Dp = 0.dp,
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -121,6 +141,24 @@ fun ScanScreen(
     /** 是否在扫描。浮层的显示条件就是它的反 —— 不再单独维护 showCover。 */
     val scanning by CameraController.scanning.collectAsState()
 
+    // 常用设备按手机号隔离：换账号就是另一个 key，跟上一个账号毫无关系
+    val devicePrefs = remember(state.phone) { DevicePrefs(context, state.phone) }
+    var deviceTick by remember { mutableStateOf(0) }
+    // 扫描时清空：浮层已经淡出，没必要再算一遍列表
+    val favorites = remember(devicePrefs, scanning, deviceTick) {
+        if (scanning) emptyList() else devicePrefs.favorites()
+    }
+    val recent = remember(devicePrefs, scanning, deviceTick) {
+        if (scanning) emptyList() else devicePrefs.recentVisits()
+    }
+    var renaming by remember { mutableStateOf<DeviceEntry?>(null) }
+
+    /** 管理模式：只影响下面那几张设备卡，不接管整页、不隐藏底栏。 */
+    var managing by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    /** 最近 7 天抽屉 */
+    var showRecent by remember { mutableStateOf(false) }
+
     var permissionDenied by remember { mutableStateOf(false) }
     var permissionGranted by remember {
         mutableStateOf(
@@ -146,7 +184,9 @@ fun ScanScreen(
     val scanner = remember {
         BarcodeScanning.getClient(
             BarcodeScannerOptions.Builder()
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE, Barcode.FORMAT_CODE_128)
+                // 只认二维码。设备上贴的就是二维码，一维码（CODE_128）从来没用到过；
+                // 只开一种格式，识别器不会去跑 1D 那条解码分支，也省得误把别的码当设备号。
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
                 .build()
         )
     }
@@ -167,16 +207,14 @@ fun ScanScreen(
         }
     }
 
-    // 白底页：状态栏图标改成深色，离开时还原
-    DisposableEffect(view) {
-        val window = (context as? Activity)?.window
-        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
-        val previous = controller?.isAppearanceLightStatusBars
-        controller?.isAppearanceLightStatusBars = true
-        onDispose {
-            if (previous != null) controller?.isAppearanceLightStatusBars = previous
-        }
-    }
+    // 状态栏外观**不在这里改**。
+    //
+    // 这里曾经有一段「进页设成深色图标、离开还原」的代码，是当年这个页面
+    // 固定白底时留下的。现在整页跟着主题走，那段就成了 bug：
+    // 深色模式下进扫描页，图标被强行刷成深色，深底上看不见；
+    // 而 enableEdgeToEdge 只在 dark 变化时执行，不会把它纠正回来。
+    //
+    // 唯一权威来源是 MainActivity 里的 enableEdgeToEdge(dark)。
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -191,12 +229,23 @@ fun ScanScreen(
 
     /**
      * 开相机的唯一入口。整个 App 里只有这个按钮和上面权限回调会调 beginScanning。
+     *
+     * 每次都重新查一遍权限，而不是只读 [permissionGranted]：
+     * 用户被拒之后会去系统设置里手动打开，回来时 Compose 不会重建这个页面，
+     * 那个状态变量还是 false —— 只读它的话点多少次都弹不出相机。
      */
     fun startScan() {
-        if (!permissionGranted) {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        permissionGranted = granted
+        if (!granted) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
             return
         }
+        permissionDenied = false
         handling.set(false)
         CameraController.beginScanning()
     }
@@ -293,6 +342,9 @@ fun ScanScreen(
                                 return@post
                             }
                             if (currentOnDecoded(text)) {
+                                // 识别成功就立刻断开相机：onScanned 只是往栈上 push
+                                // 一个路由，扫码页还留在 Pager 里没销毁，相机不会自己关
+                                CameraController.release("识别成功")
                                 currentOnScanned()
                             } else {
                                 handling.set(false)
@@ -340,6 +392,15 @@ fun ScanScreen(
         }
     }
 
+    // 浮层整体淡入淡出。
+    // 不用 AnimatedVisibility：它会把子内容的约束改成 wrap-content，
+    // fillMaxSize 随之失效，整块浮层就贴到左边去了。
+    val overlayAlpha by animateFloatAsState(
+        targetValue = if (scanning) 0f else 1f,
+        animationSpec = tween(180),
+        label = "scanOverlay"
+    )
+
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = { previewView },
@@ -349,75 +410,166 @@ fun ScanScreen(
                 .clipToBounds()
         )
 
-        // 浮层：三块内容原样保留，只是开关从 showCover 换成了 !scanning
-        AnimatedVisibility(
-            visible = !scanning,
-            exit = fadeOut()
-        ) {
-            Box(
+        // 浮层：页头 → 扫描卡 → 常用设备。
+        // 三块内容从同一个 Column 往下排，设备列表吃掉剩余高度并自己滚动 ——
+        // 卡片多了就滚，不靠「隐藏底栏」腾地方。
+        if (overlayAlpha > 0.01f) {
+            val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    // 与页面背景同色，跟随主题（深色下自动变深，不会闪浅灰）
-                    .background(MiuixTheme.colorScheme.background),
-                contentAlignment = Alignment.Center
+                    .graphicsLayer { alpha = overlayAlpha }
+                    .background(MiuixTheme.colorScheme.background)
+                    .padding(top = statusTop)
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier = Modifier.padding(32.dp)
+                PageTop()
+
+                // 页头到卡片 52dp：这段留白是整页的呼吸区。
+                // 挤到 20 出头，视觉重心会重新回到上半屏 —— 就是之前被打回的那版
+                Spacer(Modifier.height(52.dp))
+
+                HeroCard(
+                    enabled = !managing,
+                    onStartScan = { startScan() },
+                    onOpenRecent = { showRecent = true }
+                )
+
+                DeviceSection(
+                    favorites = favorites,
+                    activeDeviceId = state.session?.deviceId,
+                    managing = managing,
+                    selected = selected,
+                    onPick = { id ->
+                        // 设备编号直接当二维码原文喂进去，复用整套解析 + 加载设备名。
+                        // 但不算「扫过」，不写流水。
+                        if (onPickDevice(id)) currentOnScanned()
+                    },
+                    onToggleSelect = { id ->
+                        selected = if (id in selected) selected - id else selected + id
+                    },
+                    onSelectAll = {
+                        selected = if (selected.size == favorites.size) {
+                            emptySet()
+                        } else {
+                            favorites.map { it.id }.toSet()
+                        }
+                    },
+                    onToggleManage = {
+                        managing = !managing
+                        // 退出管理必须清空选择，否则下次进来还带着上次勾的
+                        if (!managing) selected = emptySet()
+                    },
+                    onRename = { entry -> renaming = entry },
+                    onRemove = {
+                        val count = selected.size
+                        selected.forEach { devicePrefs.removeFavorite(it) }
+                        selected = emptySet()
+                        deviceTick++
+                        Toast.makeText(context, "已移出 $count 台设备", Toast.LENGTH_SHORT).show()
+                    },
+                    onOpenRecent = { showRecent = true },
+                    bottomInset = bottomInset,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+
+    // 最近 7 天抽屉。放在浮层外面：它自带遮罩和进出场动画，
+    // 跟着浮层一起淡出会在切页时闪一下。
+    //
+    // 高度固定成 1/2 屏：抽屉随记录条数伸缩的话，每次打开都得重新找位置，
+    // 只有一条时又矮得像个提示条。定高之后不管几条，视觉重心都在同一个地方。
+    // 减掉的 52dp 是 miuix 抽屉自带的拖拽条 + 标题行高度（真机实测，不是估算）。
+    // 往上拖不再变高 —— 半屏已经能放 5 行，再多就滚动；往下拖仍然是关闭（miuix 自带）。
+    @Suppress("DEPRECATION")
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val sheetListHeight = (screenHeight * 0.50f - 52.dp).coerceAtLeast(150.dp)
+
+    OverlayBottomSheet(
+        show = showRecent,
+        title = "最近 7 天",
+        // 抽屉底色必须显式给，不能用 miuix 默认值。
+        // 默认值是 BottomSheetDefaults.backgroundColor() = colorScheme.background，
+        // 也就是「跟页面背景同色」—— MIUI 靠遮罩分层没问题，但本项目的 background
+        // 被 Theme.kt 压到了 #F2F3F5 / #121212，遮罩压暗后两块糊成一片（深色下尤其明显）。
+        // 换成 surfaceContainer（浅 #FFF / 深 #242424），和页面拉开一档，浮层才立得住。
+        backgroundColor = MiuixTheme.colorScheme.surfaceContainer,
+        endAction = {
+            IconButton(onClick = { showRecent = false }) {
+                Icon(
+                    imageVector = MiuixIcons.Close,
+                    contentDescription = "关闭",
+                    tint = MiuixTheme.colorScheme.onBackground
+                )
+            }
+        },
+        cornerRadius = 26.dp,
+        onDismissRequest = { showRecent = false }
+    ) {
+        RecentSheetContent(
+            recent = recent,
+            favoriteIds = favorites.map { it.id }.toSet(),
+            listHeight = sheetListHeight,
+            onPick = { id ->
+                // 解析失败就不关抽屉，让用户换一台点
+                if (onPickDevice(id)) {
+                    showRecent = false
+                    currentOnScanned()
+                }
+            },
+            onAdd = { id ->
+                devicePrefs.addFavorite(id)
+                deviceTick++
+                Toast.makeText(context, "已添加到常用设备", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    // 权限被拒改用对话框：新版浮层里没有位置塞一段红字，
+    // 而且只有真的去点了扫描才该弹，浏览列表时不该被打扰
+    if (permissionDenied) {
+        OverlayDialog(
+            show = true,
+            title = "需要相机权限",
+            summary = "扫码要用到摄像头，请在系统设置里允许「慧生活」访问相机。",
+            onDismissRequest = { permissionDenied = false }
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TextButton(
+                    text = "稍后",
+                    onClick = { permissionDenied = false },
+                    modifier = Modifier.weight(1f)
+                )
+                Button(
+                    onClick = {
+                        permissionDenied = false
+                        openAppSettings(context)
+                    },
+                    colors = ButtonDefaults.buttonColorsPrimary(),
+                    modifier = Modifier.weight(1f)
                 ) {
-                    if (permissionDenied) {
-                        Text(
-                            text = "需要相机权限才能扫码",
-                            color = MiuixTheme.colorScheme.onSurface,
-                            fontSize = 14.sp,
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        TextButton(
-                            text = "去系统设置开启",
-                            onClick = { openAppSettings(context) }
-                        )
-                        Spacer(Modifier.height(20.dp))
-                        // 从系统设置回来后再点一次，权限已授予就会直接开相机
-                        Button(
-                            onClick = { startScan() },
-                            colors = ButtonDefaults.buttonColorsPrimary(),
-                            modifier = Modifier.height(52.dp)
-                        ) {
-                            Text("点击启动扫描", fontSize = 16.sp)
-                        }
-                    } else {
-                        // 有一条会话还在出水：这是最该被看见的东西，
-                        // 否则用户只能靠记忆想起「我刚才是不是没关水」
-                        state.session?.let { session ->
-                            Text(
-                                text = "「${session.deviceName ?: session.deviceId}」正在出水",
-                                color = MiuixTheme.colorScheme.onSurface,
-                                fontSize = 14.sp,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            Button(
-                                onClick = onResumeUsing,
-                                colors = ButtonDefaults.buttonColorsPrimary(),
-                                modifier = Modifier.height(52.dp)
-                            ) {
-                                Text("回到用水界面", fontSize = 16.sp)
-                            }
-                            Spacer(Modifier.height(28.dp))
-                        }
-                        Button(
-                            onClick = { startScan() },
-                            colors = ButtonDefaults.buttonColorsPrimary(),
-                            modifier = Modifier.height(52.dp)
-                        ) {
-                            Text("点击启动扫描", fontSize = 16.sp)
-                        }
-                    }
+                    Text("去设置")
                 }
             }
         }
+    }
+
+    // 改名弹窗放在浮层外面：它不该跟着浮层一起淡出
+    renaming?.let { entry ->
+        RenameDialog(
+            entry = entry,
+            onConfirm = { alias ->
+                devicePrefs.renameFavorite(entry.id, alias)
+                deviceTick++
+                renaming = null
+            },
+            onDismiss = { renaming = null }
+        )
     }
 }
 
@@ -446,5 +598,53 @@ private fun openAppSettings(context: android.content.Context) {
         )
     }.onFailure {
         AppLog.w("Scan", "无法打开应用设置: ${it.message}")
+    }
+}
+
+/**
+ * 改名弹窗。
+ *
+ * 副标题显示服务端返回的原设备名 —— 用户靠名字认设备，不靠编号。
+ * 清空保存 = 恢复原名。
+ */
+@Composable
+private fun RenameDialog(
+    entry: DeviceEntry,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember(entry.id) { mutableStateOf(entry.alias) }
+
+    OverlayDialog(
+        show = true,
+        title = "重命名",
+        summary = entry.name.ifBlank { null },
+        onDismissRequest = onDismiss
+    ) {
+        TextField(
+            value = text,
+            onValueChange = { if (it.length <= 16) text = it },
+            label = "设备名字",
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(20.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            TextButton(
+                text = "取消",
+                onClick = onDismiss,
+                modifier = Modifier.weight(1f)
+            )
+            Button(
+                onClick = { onConfirm(text) },
+                colors = ButtonDefaults.buttonColorsPrimary(),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("保存")
+            }
+        }
     }
 }

@@ -8,6 +8,7 @@ import com.life798.mini.BuildConfig
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.BillStore
+import com.life798.mini.core.DevicePrefs
 import com.life798.mini.core.DeviceSession
 import com.life798.mini.core.DeviceSessionStore
 import com.life798.mini.core.Prefs
@@ -116,16 +117,33 @@ data class UiState(
     val loggedIn: Boolean get() = token.isNotBlank()
 }
 
-class AppViewModel(app: Application) : AndroidViewModel(app) {
+class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val prefs = Prefs(app)
     private val api = WaterApi()
-    private val billStore = BillStore(app)
+
+    /**
+     * 账单仓库。**按当前登录手机号取**，所以是个 getter 而不是字段 ——
+     * 换账号后拿到的自然是另一个 key 的账本。构造成本只有一个 SP 引用，可以随便建。
+     */
+    private val billStore: BillStore
+        get() = BillStore(app, _ui.value.phone)
+
+    /** 常用设备 + 最近 7 天流水。同样按手机号隔离，跟账单各管各的。 */
+    private val devicePrefs: DevicePrefs
+        get() = DevicePrefs(app, _ui.value.phone)
 
     /** 当前会话的落盘记录，用来在进程被杀后重新认领「还在流水」的设备。 */
     private val sessionStore = DeviceSessionStore(app)
 
     private val _ui = MutableStateFlow(UiState(configured = api.isConfigured))
+
+    init {
+        // 「按账号隔离」之前的单份数据已经分不清是谁的了，启动时清一次。
+        // 新 key（bills_<owner> / favorites_<owner>）一个都不碰。
+        BillStore.clearLegacy(app)
+        DevicePrefs.clearLegacy(app)
+    }
 
     /** 同一个码 3 秒内只提示一次，否则每帧识别都会触发一次 */
     private var lastRejectKey: String? = null
@@ -407,7 +425,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 扫码结果处理。
      * @return true 表示已解析出慧生活798 的设备编号（调用方可以离开扫码页）
      */
-    fun onQrDecoded(raw: String): Boolean {
+    fun onQrDecoded(raw: String, record: Boolean = true): Boolean {
         AppLog.i("Scan", "二维码原文: ${raw.take(120)}")
 
         return when (val r = QrParser.parse(raw)) {
@@ -424,6 +442,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     message = null
                 )
                 if (!sameDevice || cur.deviceName.isBlank()) loadDeviceName(r.deviceId)
+                // 记一笔使用流水（不去重，同一台扫几次就记几条）。
+                // 名字这会儿多半还没有，等 loadDeviceName 回来再补。
+                // 从设备列表点进来不算「用过」，不能记账 —— 否则点一次多一条。
+                if (record) {
+                    devicePrefs.recordVisit(
+                        id = r.deviceId,
+                        name = if (sameDevice) cur.deviceName else ""
+                    )
+                }
                 true
             }
 
@@ -582,6 +609,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     val name = r.data.trim()
                     if (name.isBlank()) return@launch
                     AppLog.i("Device", "设备名 did=$deviceId → $name")
+                    // 名字补进流水和常用列表，浮层下次渲染就能显示名字
+                    devicePrefs.updateName(deviceId, name)
                     val cur = _ui.value
                     if (cur.deviceId != deviceId) return@launch
                     _ui.value = cur.copy(deviceName = name)

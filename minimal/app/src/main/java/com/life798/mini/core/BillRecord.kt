@@ -43,13 +43,24 @@ data class BillTotals(val liters: Double, val yuan: Double)
  * - 金额为 0 的账单在入口处就被丢弃 —— 那是「启动了但没出水」的空账单，
  *   抓包实证：这类会话 `gene.out` 全程不变，用量 0 升、扣费 0 元，不该记账
  *
+ * **按账号隔离**：存储 key 是 `bills_<owner>`，owner 是当前登录的手机号。
+ * 服务端不长期保存账单，本地账本就是唯一的历史，所以换账号绝不能共用一份 ——
+ * 否则两个账号的账单会混在一个账本里，金额和升数全错。
+ * [owner] 为空（未登录 / 刚登出）时整个仓库短路，不读也不写。
+ *
  * 存 SharedPreferences，一个 JSON 数组。3000 条大约 600KB，解析一次几毫秒，
  * 对账本页完全够用，不值得为这点数据引入数据库。
  */
-class BillStore(context: Context) {
+class BillStore(context: Context, private val owner: String) {
 
     private val sp = context.applicationContext
         .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** 这个账号自己的账本。不同账号互不可见。 */
+    private val key = "$KEY_PREFIX$owner"
+
+    /** 没登录就没有账本 —— 防止登出后还读到上一个账号的数据。 */
+    private val enabled: Boolean get() = owner.isNotBlank()
 
     /** 全部账单，按时间倒序 —— 账本惯例是最新的在最上面。 */
     @Synchronized
@@ -62,7 +73,7 @@ class BillStore(context: Context) {
      */
     @Synchronized
     fun merge(incoming: List<BillRecord>): Int {
-        if (incoming.isEmpty()) return 0
+        if (!enabled || incoming.isEmpty()) return 0
         val current = read().associateBy { it.id }.toMutableMap()
         var added = 0
         incoming.forEach { bill ->
@@ -166,7 +177,8 @@ class BillStore(context: Context) {
     // ---------------- 内部 ----------------
 
     private fun read(): List<BillRecord> {
-        val raw = sp.getString(KEY_BILLS, null) ?: return emptyList()
+        if (!enabled) return emptyList()
+        val raw = sp.getString(key, null) ?: return emptyList()
         // 数据损坏就当空账本，宁可少显示也不要让页面崩
         return runCatching {
             val array = JSONArray(raw)
@@ -192,6 +204,7 @@ class BillStore(context: Context) {
     }
 
     private fun write(bills: Collection<BillRecord>) {
+        if (!enabled) return
         // 超出上限丢最旧的，防止 JSON 无限膨胀
         val trimmed = bills.sortedByDescending { it.at }.take(MAX_BILLS)
         val array = JSONArray()
@@ -206,7 +219,7 @@ class BillStore(context: Context) {
             array.put(obj)
         }
         // 账单是用户唯一的历史记录，用 commit 同步落盘，进程被杀也不丢
-        sp.edit().putString(KEY_BILLS, array.toString()).commit()
+        sp.edit().putString(key, array.toString()).commit()
     }
 
     private fun round3(value: Double): Double = round(value * 1000.0) / 1000.0
@@ -214,9 +227,23 @@ class BillStore(context: Context) {
     private fun Long.toLocalDate(): LocalDate =
         Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()).toLocalDate()
 
-    private companion object {
-        const val PREFS = "bill_store"
-        const val KEY_BILLS = "bills"
-        const val MAX_BILLS = 3000
+    companion object {
+        private const val PREFS = "bill_store"
+        private const val KEY_PREFIX = "bills_"
+        private const val MAX_BILLS = 3000
+
+        /**
+         * 删掉「按账号隔离」之前的单份账本。
+         *
+         * 那时候所有账号共用 `bills` 这一个 key，里面的数据已经分不清是谁的了，
+         * 留着只会误导 —— 启动时清一次，之后永远走 `bills_<owner>`。
+         */
+        fun clearLegacy(context: Context) {
+            context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove("bills")
+                .apply()
+        }
     }
 }

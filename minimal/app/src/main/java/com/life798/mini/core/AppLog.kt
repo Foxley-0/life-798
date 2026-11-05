@@ -1,25 +1,39 @@
 package com.life798.mini.core
 
 import android.content.Context
+import android.util.Log
+import com.life798.mini.BuildConfig
 
 /**
- * 日志占位。
+ * 日志。
  *
- * 日志功能已整体移除：不写文件、不打 logcat、没有应用内日志页。
+ * 只打 logcat，不写文件、没有应用内日志页 —— 那些会带来存储和隐私成本。
+ * release 包完全静默（[BuildConfig.DEBUG] 为 false 时直接返回），
+ * debug 包全量输出，排查相机释放、接口失败这些全靠它。
  *
- * 保留这些空函数是为了不改动全项目几百处 `AppLog.i("Scan", ...)` 调用 ——
- * 那些调用点以后如果要恢复日志，把这里换回实现即可。
- *
- * `mask` / `maskPhone` / `preview` 仍有实现：它们也可能被用于非日志的展示场景。
+ * tag 统一加 `798/` 前缀，`adb logcat -s 798/Scan` 就能只看扫码这一路。
  */
 object AppLog {
 
+    private const val PREFIX = "798/"
+
     fun init(context: Context) = Unit
 
-    fun d(tag: String, msg: String) = Unit
-    fun i(tag: String, msg: String) = Unit
-    fun w(tag: String, msg: String, t: Throwable? = null) = Unit
-    fun e(tag: String, msg: String, t: Throwable? = null) = Unit
+    fun d(tag: String, msg: String) {
+        if (BuildConfig.DEBUG) Log.d(PREFIX + tag, msg)
+    }
+
+    fun i(tag: String, msg: String) {
+        if (BuildConfig.DEBUG) Log.i(PREFIX + tag, msg)
+    }
+
+    fun w(tag: String, msg: String, t: Throwable? = null) {
+        if (BuildConfig.DEBUG) Log.w(PREFIX + tag, msg, t)
+    }
+
+    fun e(tag: String, msg: String, t: Throwable? = null) {
+        if (BuildConfig.DEBUG) Log.e(PREFIX + tag, msg, t)
+    }
 
     /** token 只保留首 6 位与尾 4 位。 */
     fun mask(token: String?): String {

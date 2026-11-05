@@ -241,7 +241,6 @@ private fun MiniApp(
     var lastNavAt by remember { mutableLongStateOf(0L) }
     // 动画方向：push 往右进，pop 往左出（不能靠"目标是不是 TABS"判断）
     var navForward by remember { mutableStateOf(true) }
-    var confirmExitStart by remember { mutableStateOf(false) }
 
     /**
      * 切 tab 的唯一入口。
@@ -345,13 +344,8 @@ private fun MiniApp(
         return true
     }
 
-    /** 返回按钮与系统返回键走同一条路：启动页先弹确认，其余直接出栈。 */
+    /** 返回按钮与系统返回键走同一条路：直接出栈。 */
     fun requestBack() {
-        // 弹窗已经开着就忽略，避免一次按键被两条通道各触发一次
-        if (confirmExitStart) {
-            AppLog.i("Nav", "弹窗已打开，忽略重复返回")
-            return
-        }
         val now = System.currentTimeMillis()
         if (now - lastNavAt < 220L) {
             AppLog.i("Nav", "返回过快，忽略")
@@ -359,11 +353,7 @@ private fun MiniApp(
         }
         lastNavAt = now
         AppLog.i("Nav", "back stack=$stack page=${tabs.selectedPage}")
-        if (stack.lastOrNull() == Route.START.name) {
-            confirmExitStart = true
-        } else {
-            pop()
-        }
+        pop()
     }
     // 全局唯一的返回入口
     BackHandler {
@@ -420,41 +410,6 @@ private fun MiniApp(
             )
         }
 
-        if (confirmExitStart) {
-            OverlayDialog(
-                show = true,
-                title = "确定返回吗？",
-                // 设备还在出水时必须说清楚：返回不会停水，只清编号。
-                // 不提示的话用户会以为退出即关闭，水就一直流着。
-                summary = if (state.session != null) {
-                    "设备仍在出水，返回不会停止出水。可以稍后从「扫描」页回到用水界面关闭。"
-                } else {
-                    "返回后设备编号会被清除，需要重新扫描二维码。"
-                },
-                onDismissRequest = { confirmExitStart = false }
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    TextButton(
-                        text = "取消",
-                        onClick = { confirmExitStart = false },
-                        modifier = Modifier.weight(1f)
-                    )
-                    Button(
-                        onClick = {
-                            confirmExitStart = false
-                            pop()
-                        },
-                        colors = ButtonDefaults.buttonColorsPrimary(),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("确定")
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -697,6 +652,7 @@ private fun MainContent(
                                 state = state,
                                 onEnter = vm::clearMessage,
                                 onDecoded = vm::onQrDecoded,
+                                bottomInset = bottomInset,
                                 // 扫的还是正在出水的那台设备 → 直接回用水页，
                                 // 别让用户对着一个「启动」按钮再点一次
                                 onScanned = {

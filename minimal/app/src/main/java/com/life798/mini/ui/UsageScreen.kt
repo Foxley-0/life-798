@@ -76,11 +76,12 @@ private data class BillSnapshot(
 @Composable
 fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
     val context = LocalContext.current
-    val store = remember { BillStore(context) }
+    // 账本按手机号隔离：换账号就是另一个 key，跟上一个账号毫无关系
+    val store = remember(state.phone) { BillStore(context, state.phone) }
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
 
     // 有账单的年份 / 月份，滚轮里只出现这些，空月份转不到
-    val years = remember(state.billsRevision) { store.years() }
+    val years = remember(store, state.billsRevision) { store.years() }
 
     var year by rememberSaveable { mutableIntStateOf(LocalDate.now().year) }
     var month by rememberSaveable { mutableIntStateOf(LocalDate.now().monthValue) }
@@ -102,7 +103,7 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
         }
     }
 
-    val snapshot = remember(year, month, state.billsRevision) {
+    val snapshot = remember(store, year, month, state.billsRevision) {
         BillSnapshot(
             bills = store.monthBills(year, month),
             monthTotals = store.monthTotals(year, month),

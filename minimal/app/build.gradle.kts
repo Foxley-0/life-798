@@ -22,15 +22,16 @@ android {
         applicationId = "com.life798.mini"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "1.4.4"
+        versionCode = 25
+        versionName = "1.5.0"
 
         buildConfigField("String", "API_GATEWAY", "\"${secret("API_GATEWAY")}\"")
         buildConfigField("String", "APP_SIGN_SALT", "\"${secret("APP_SIGN_SALT")}\"")
 
-        // ZXing 为纯 Java，无原生库；CameraX 自带 so，保留两个主流 ABI。
+        // 只发 64 位。目标环境是 arm64，32 位那套 so 白占 3.1 MiB
+        // （ML Kit 的 libbarhopper_v3.so 光 v7a 版本就占 3.09 MiB）。
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
@@ -103,14 +104,13 @@ dependencies {
     implementation("androidx.core:core-ktx:1.17.0")
     // MIUI / HyperOS 风格组件库（取代 Material3）
     implementation("top.yukonga.miuix.kmp:miuix-ui-android:0.9.4-rc01")
-    implementation("top.yukonga.miuix.kmp:miuix-squircle-android:0.9.4-rc01")
+    // miuix-squircle 不在这里声明 —— miuix-ui 已经传递引入（squircleSurface 在用）
     implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.4-rc01")
     // 设置项组件（ArrowPreference / OverlayDropdownPreference / SwitchPreference）
     implementation("top.yukonga.miuix.kmp:miuix-preference-android:0.9.4-rc01")
     // 背景流动效果依赖 RuntimeShader
     implementation("top.yukonga.miuix.kmp:miuix-blur-android:0.9.4-rc01")
     implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
@@ -129,6 +129,4 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     testImplementation("junit:junit:4.13.2")
-
-    debugImplementation("androidx.compose.ui:ui-tooling")
 }
