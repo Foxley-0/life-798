@@ -665,7 +665,11 @@ private fun MainContent(
                                         }
                                     )
                                 },
-                                onResumeUsing = { onPush(Route.USING) },
+                                // 卡片上的设备行：点哪台进哪台的页面。
+                                // 现在卡里只会出现正在使用的设备，所以一律进用水页；
+                                // 将来卡片容纳多个平台的设备时，按行所属的 deviceId 分流。
+                                // push 自带去重（栈顶已是 USING 时忽略），连点不会叠两层。
+                                onOpenActive = { onPush(Route.USING) },
                             )
 
                             1 -> UsageScreen(

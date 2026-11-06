@@ -58,14 +58,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.common.InputImage
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.CameraController
 import com.life798.mini.core.DeviceEntry
 import com.life798.mini.core.DevicePrefs
+import com.life798.mini.scan.WxQrEngine
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -78,17 +75,18 @@ import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
- * 扫码页：CameraX + ML Kit，**分析整帧**。
+ * 扫码页：CameraX + 微信二维码引擎，**分析整帧**。
  *
  * 相机生命周期只有两条路：
  * - 点「点击启动扫描」→ [CameraController.beginScanning] → 绑定
@@ -109,8 +107,8 @@ fun ScanScreen(
     onScanned: () -> Unit,
     /** 从设备列表点进来：同样解析编号，但**不记账**（不是真的扫过） */
     onPickDevice: (String) -> Boolean = onDecoded,
-    /** 有设备正在出水时，浮层上多一个「回到用水界面」的入口 */
-    onResumeUsing: () -> Unit = {},
+    /** 点卡片上的设备行：进那台设备的页面（启动 / 用水由目标页自己判断） */
+    onOpenActive: () -> Unit = {},
     /** 底栏占掉的高度。设备列表底部要避开它，否则最后一项会被胶囊压住 */
     bottomInset: Dp = 0.dp,
 ) {
@@ -119,24 +117,6 @@ fun ScanScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
-
-    /**
-     * 关帧专用执行器。
-     *
-     * 为什么不直接用 analysisExecutor：页面销毁时 onDispose 会 shutdown 它，
-     * 而这一刻可能还有一帧挂在 ML Kit 里没回调完。等它回调时再往已关闭的
-     * 线程池投递，会抛 RejectedExecutionException —— 抛在 ML Kit 的内部线程上，
-     * 没人接，直接崩。
-     *
-     * 线程池还活着 → 丢进去异步关；已经关了 → 就在当前线程同步关。
-     * 两条路都保证 proxy.close() 一定被执行，管线不会卡死。
-     */
-    val closeExecutor = remember {
-        Executor { runnable ->
-            runCatching { analysisExecutor.execute(runnable) }
-                .onFailure { runnable.run() }
-        }
-    }
 
     /** 是否在扫描。浮层的显示条件就是它的反 —— 不再单独维护 showCover。 */
     val scanning by CameraController.scanning.collectAsState()
@@ -151,6 +131,30 @@ fun ScanScreen(
     val recent = remember(devicePrefs, scanning, deviceTick) {
         if (scanning) emptyList() else devicePrefs.recentVisits()
     }
+
+    /**
+     * 卡片里要展示的设备：只认「正在使用」的会话，**不认扫到了但还没启动的设备号**。
+     *
+     * 现在只有出水平台一条会话，所以最多一条。将来洗衣等其它平台各有一份会话，
+     * 在这里合并成列表就行 —— 卡片版式不用动，它会自动变成两行。
+     *
+     * 名字优先级：用户改过的别名 → 服务端返回的设备名 → 设备编号。
+     * 和常用设备区（`DeviceEntry.displayName`）同一套规则，避免同一台机器
+     * 在卡片里和在列表里叫两个名字。
+     */
+    val activeDevices = remember(state.session, favorites) {
+        state.session?.let { s ->
+            val alias = favorites.firstOrNull { it.id == s.deviceId }?.displayName
+            listOf(
+                HeroDevice(
+                    id = s.deviceId,
+                    name = alias ?: s.deviceName?.takeIf { it.isNotBlank() } ?: s.deviceId,
+                    startedAt = s.startedAt
+                )
+            )
+        } ?: emptyList()
+    }
+
     var renaming by remember { mutableStateOf<DeviceEntry?>(null) }
 
     /** 管理模式：只影响下面那几张设备卡，不接管整页、不隐藏底栏。 */
@@ -181,14 +185,20 @@ fun ScanScreen(
         }
     }
 
-    val scanner = remember {
-        BarcodeScanning.getClient(
-            BarcodeScannerOptions.Builder()
-                // 只认二维码。设备上贴的就是二维码，一维码（CODE_128）从来没用到过；
-                // 只开一种格式，识别器不会去跑 1D 那条解码分支，也省得误把别的码当设备号。
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                .build()
-        )
+    // 进页就预热。模型是 4 个 caffe 文件，加载要几百毫秒 —— 等用户点了按钮
+    // 再加载，第一帧就白等了。放 IO 线程，不占 analysisExecutor（那条要留给送帧）。
+    //
+    // 失败必须让用户看见：引擎没起来的话，现象和「扫不出来」一模一样，
+    // 光看界面分不清是模型没加载还是识别不到。
+    LaunchedEffect(Unit) {
+        val ok = withContext(Dispatchers.IO) { WxQrEngine.init(context) }
+        if (!ok) {
+            Toast.makeText(
+                context,
+                "扫码引擎加载失败：${WxQrEngine.status()}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     val currentOnDecoded by rememberUpdatedState(onDecoded)
@@ -201,7 +211,7 @@ fun ScanScreen(
         onDispose {
             alive.set(false)
             CameraController.release("扫码页销毁")
-            runCatching { scanner.close() }
+            WxQrEngine.release()
             analysisExecutor.shutdown()
             AppLog.i("Scan", "离开扫码页，识别器已释放")
         }
@@ -273,7 +283,7 @@ fun ScanScreen(
 
             // Preview 和 ImageAnalysis **故意用不同的分辨率**。
             //
-            // 原来两者共用 1920×1080：画面是清楚了，但 ML Kit 单帧要处理
+            // 原来两者共用 1920×1080：画面是清楚了，但识别器单帧要处理
             // 200 万像素，低端机 1~3 秒。而这个帧率直接决定了两件事：
             //   ① 扫码响应速度
             //   ② 释放相机时 unbindAll 要等多久（它要等 in-flight 的帧结束）
@@ -319,47 +329,35 @@ fun ScanScreen(
                     proxy.close()
                     return@setAnalyzer
                 }
-                val media = proxy.image
-                if (media == null) {
-                    proxy.close()
-                    return@setAnalyzer
-                }
-                val input = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-                scanner.process(input)
-                    .addOnSuccessListener { barcodes ->
-                        val barcode = barcodes.firstOrNull()
-                        val text = barcode?.rawValue
-                        if (text.isNullOrBlank()) return@addOnSuccessListener
-                        // 抢到处理权才继续，避免同一帧回调多次
-                        if (!handling.compareAndSet(false, true)) return@addOnSuccessListener
-                        val corners = barcode.cornerPoints
-                            ?.joinToString { "(${it.x.toInt()},${it.y.toInt()})" }
-                            .orEmpty()
-                        AppLog.i("Scan", "识别到: ${text.take(100)} 码位置=$corners")
-                        mainHandler.post {
-                            if (!alive.get()) {
-                                handling.set(false)
-                                return@post
-                            }
-                            if (currentOnDecoded(text)) {
-                                // 识别成功就立刻断开相机：onScanned 只是往栈上 push
-                                // 一个路由，扫码页还留在 Pager 里没销毁，相机不会自己关
-                                CameraController.release("识别成功")
-                                currentOnScanned()
-                            } else {
-                                handling.set(false)
-                            }
+                try {
+                    val text = WxQrEngine.decode(proxy)
+                    if (text.isNullOrBlank()) return@setAnalyzer
+                    // 抢到处理权才继续，避免同一帧回调多次
+                    if (!handling.compareAndSet(false, true)) return@setAnalyzer
+                    AppLog.i("Scan", "识别到: ${text.take(100)} 解码=${WxQrEngine.lastDecodeMs}ms")
+                    mainHandler.post {
+                        if (!alive.get()) {
+                            handling.set(false)
+                            return@post
+                        }
+                        if (currentOnDecoded(text)) {
+                            // 识别成功就立刻断开相机：onScanned 只是往栈上 push
+                            // 一个路由，扫码页还留在 Pager 里没销毁，相机不会自己关
+                            CameraController.release("识别成功")
+                            currentOnScanned()
+                        } else {
+                            handling.set(false)
                         }
                     }
-                    .addOnFailureListener { e ->
-                        handling.set(false)
-                        AppLog.w("Scan", "识别失败: ${e.message}")
-                    }
-                    // 必须关，否则管线会卡死。
-                    // 回调显式指定 closeExecutor：默认走主线程，切页时 Compose
-                    // 转场动画把主线程占满，这个 close 就得排队 —— 而 unbindAll
-                    // 正等着它。
-                    .addOnCompleteListener(closeExecutor) { proxy.close() }
+                } catch (t: Throwable) {
+                    handling.set(false)
+                    AppLog.w("Scan", "识别失败: ${t.message}")
+                } finally {
+                    // 必须关，否则 KEEP_ONLY_LATEST 的管线会永久卡死。
+                    // 微信引擎是同步解码，直接在这条分析线程上关即可，
+                    // 不再需要原来那个借线程池关帧的 closeExecutor。
+                    proxy.close()
+                }
             }
 
             provider.unbindAll()
@@ -371,7 +369,7 @@ fun ScanScreen(
             )
             CameraController.markBound(provider) {
                 // 同步断开两条管线。必须在 unbindAll 之前做：
-                // clearAnalyzer 让 CameraX 停止往 analyzer 送帧（不再等 ML Kit 处理完），
+                // clearAnalyzer 让 CameraX 停止往 analyzer 送帧（不再等识别器处理完），
                 // setSurfaceProvider(null) 让 Preview 立刻放掉 Surface。
                 // 这两个调用返回后画面就没了，用户看到的是「相机立刻关掉」。
                 runCatching { analysis.clearAnalyzer() }
@@ -430,9 +428,11 @@ fun ScanScreen(
                 Spacer(Modifier.height(52.dp))
 
                 HeroCard(
+                    devices = activeDevices,
                     enabled = !managing,
                     onStartScan = { startScan() },
-                    onOpenRecent = { showRecent = true }
+                    onOpenRecent = { showRecent = true },
+                    onOpenDevice = { onOpenActive() }
                 )
 
                 DeviceSection(

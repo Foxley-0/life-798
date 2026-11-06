@@ -102,9 +102,9 @@ private val REFERENCE_PROJECTS = listOf(
         url = "https://developer.android.com/media/camera/camerax",
     ),
     ReferenceProject(
-        name = "ML Kit Barcode Scanning",
-        desc = "二维码识别 · Google SDK",
-        url = "https://developers.google.com/ml-kit/vision/barcode-scanning",
+        name = "微信二维码引擎",
+        desc = "二维码识别 · OpenCV WeChatQRCode · Apache-2.0",
+        url = "https://github.com/opencv/opencv_contrib/tree/4.x/modules/wechat_qrcode",
     ),
     ReferenceProject(
         name = "OkHttp",

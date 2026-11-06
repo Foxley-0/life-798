@@ -25,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.life798.mini.R
 import com.life798.mini.core.DeviceEntry
+import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -115,6 +118,31 @@ internal fun PageTop() {
 // ---------------------------------------------------------------------------
 
 /**
+ * 卡片里的一台设备。
+ *
+ * 只描述「它是谁、从什么时候开始」，不关心它来自哪个平台 ——
+ * 出水、洗衣将来各有各的会话，但卡片只负责并列展示，所以这里不需要平台字段。
+ * 真要区分时在这里加，卡片的版式不用动。
+ */
+internal data class HeroDevice(
+    val id: String,
+    val name: String,
+    val startedAt: Long,
+)
+
+/** 同时最多展示两台。再多也放不下，而且业务上不会出现。 */
+private const val MAX_DEVICES = 2
+
+/**
+ * 卡片固定高度。
+ *
+ * 178dp = insideMargin(24 × 2) + 内容区 130dp，而 130dp 正好是空态的自然高度
+ * （取景框 66 + 间距 18 + 按钮 46）。**锁死它，空态外观分毫不变**；
+ * 有设备时内容在 130dp 里垂直居中，卡片外框不跟着行数跳。
+ */
+private val HeroCardHeight = 178.dp
+
+/**
  * 主视觉：一块标准的 miuix [Card]。
  *
  * 不自绘背景 —— 渐变、玻璃、高光边这些都是自己发明材质，一旦和系统其它页面
@@ -122,41 +150,204 @@ internal fun PageTop() {
  * surfaceContainer）而不是材质，卡片只要用对色阶，圆角、按压反馈、深浅模式
  * 全部由组件自己处理。
  *
- * 所以这里只负责「卡里放什么」：取景框 + 主按钮 + 次要入口。
+ * 卡里放什么由 [devices] 决定，只有三种形态：
+ *
+ * | 设备数 | 内容 | 底部按钮 |
+ * |---|---|---|
+ * | 0 | 取景框 + 时钟 + 扫码 | 有（撑满剩余宽度） |
+ * | 1 | 一张设备卡 + 扫码 | 有（自然宽度，居中） |
+ * | 2 | 两张设备卡 | **无** —— 到上限了，再放一个点不动的入口只会误导 |
+ *
+ * 卡片只做「展示 + 跳转」，停水、启动全在设备页里做。
+ *
+ * **外层这张卡永远在**，设备卡是嵌在它里面的。内层底色直接用 `cs.background`：
+ * 大卡是白的（#FFFFFF），设备卡回到页面底色（#F2F3F5），形成「卡里挖了个槽」的凹陷感 ——
+ * MIUI 设置页里那种分组输入框就是这个关系。
+ *
+ * 不用 `cs.surface`：浅色下它是 #F7F7F7（和背景只差 5，等于没有），深色下是纯黑（压得过重）。
+ * 也不用 `onSurface` 叠透明度：8% 出来是 #EBEBEB，比页面底色灰一档，看着发闷。
  */
 @Composable
 internal fun HeroCard(
+    devices: List<HeroDevice>,
     enabled: Boolean,
     onStartScan: () -> Unit,
     onOpenRecent: () -> Unit,
+    onOpenDevice: (String) -> Unit,
 ) {
     val cs = MiuixTheme.colorScheme
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
+            .height(HeroCardHeight)
             .graphicsLayer { alpha = if (enabled) 1f else 0.38f },
         insideMargin = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
-        // 比常用设备那几张卡高一档，靠色阶而不是阴影分层
+        // 和常用设备卡、用量页的卡同一档色阶，三种卡摆在一起不会打架
         colors = CardDefaults.defaultColors(color = cs.surfaceContainer)
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            ScanFrame()
-            Spacer(Modifier.height(18.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+        if (devices.isEmpty()) {
+            EmptyHero(enabled = enabled, onStartScan = onStartScan, onOpenRecent = onOpenRecent)
+        } else {
+            // 计时器提到这一层：两行共用一次重组，而不是每行各起一个。
+            // 卡片被置灰（管理模式）时 enabled=false，ticker 自动停，不空转。
+            val now = rememberNowTick(active = enabled)
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 时钟放左边：右手单手握机时拇指落在右下，右边留给主按钮，
-                // 次要入口离拇指远一点，误触概率低
-                GhostButton(enabled = enabled, onClick = onOpenRecent)
-                PrimaryButton(enabled = enabled, onClick = onStartScan)
+                devices.take(MAX_DEVICES).forEachIndexed { index, device ->
+                    if (index > 0) Spacer(Modifier.height(8.dp))
+                    HeroDeviceCard(
+                        device = device,
+                        now = now,
+                        onClick = { onOpenDevice(device.id) }
+                    )
+                }
+                if (devices.size < MAX_DEVICES) {
+                    Spacer(Modifier.height(12.dp))
+                    PrimaryButton(enabled = enabled, onClick = onStartScan)
+                }
             }
         }
     }
+}
+
+/** 一台设备都没有时的样子 —— 就是原来那套取景框 + 时钟 + 大按钮，样式一字不改。 */
+@Composable
+private fun EmptyHero(
+    enabled: Boolean,
+    onStartScan: () -> Unit,
+    onOpenRecent: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        ScanFrame()
+        Spacer(Modifier.height(18.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // 时钟放左边：右手单手握机时拇指落在右下，右边留给主按钮，
+            // 次要入口离拇指远一点，误触概率低
+            GhostButton(enabled = enabled, onClick = onOpenRecent)
+            PrimaryButton(enabled = enabled, onClick = onStartScan)
+        }
+    }
+}
+
+/**
+ * 一张设备卡，嵌在 [HeroCard] 里面，整张可点。
+ *
+ * 高度 60dp（上下 11dp + 图标 38dp），两张加 8dp 间距共 128dp，
+ * 一台时再加 12dp 间距和 46dp 按钮共 118dp —— 都塞得进 130dp 的内容区。
+ *
+ * 图标必须给够尺寸：26dp 的方块配 14dp 描边水滴，红色叠红色会糊成一团，
+ * 看起来像被底色盖住了。这里 38dp 方块 + 20dp 水滴 + 主色，边界才立得住。
+ *
+ * 计时和箭头都**不参与 weight**，名字再长也挤不走它们；
+ * 名字自己 `maxLines = 1` + 省略号，永远不会溢出卡片。
+ */
+@Composable
+private fun HeroDeviceCard(
+    device: HeroDevice,
+    now: Long,
+    onClick: () -> Unit,
+) {
+    val cs = MiuixTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(cs.background)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(cs.primary.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            DropGlyph(size = 20.dp, color = cs.primary, strokeUnits = 2.2f)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = device.name,
+                color = cs.onSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "正在使用",
+                    color = cs.onSurfaceVariantSummary,
+                    fontSize = 11.5.sp,
+                    maxLines = 1
+                )
+                Text(
+                    text = " · ",
+                    color = cs.onSurfaceVariantSummary,
+                    fontSize = 11.5.sp,
+                    maxLines = 1
+                )
+                Text(
+                    text = elapsedLabel(now - device.startedAt),
+                    color = cs.primary,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            imageVector = MiuixIcons.ChevronForward,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = cs.onSurfaceVariantSummary
+        )
+    }
+}
+
+/**
+ * 每秒推进一次的「现在」。
+ *
+ * 只在卡片可见且可交互时跳 —— 置灰、切页、扫码浮层盖住时都不会空转。
+ * 用 `produceState` 而不是 `LaunchedEffect` + `mutableStateOf`：
+ * 后者要自己管作用域，前者离开组合就自动取消。
+ */
+@Composable
+private fun rememberNowTick(active: Boolean): Long {
+    val now by produceState(initialValue = System.currentTimeMillis(), active) {
+        while (active) {
+            value = System.currentTimeMillis()
+            delay(1000L)
+        }
+    }
+    return now
+}
+
+/** 已用时长：HH:mm:ss。设备刚启动、时钟有偏差时按 0 处理，不显示负数。 */
+private fun elapsedLabel(elapsedMs: Long): String {
+    val total = (elapsedMs / 1000L).coerceAtLeast(0L)
+    return String.format(
+        Locale.US,
+        "%02d:%02d:%02d",
+        total / 3600,
+        total % 3600 / 60,
+        total % 60
+    )
 }
 
 /** 取景框：只保留上面两个角，下面两个角会跟按钮挤在一起。 */
@@ -396,7 +587,13 @@ internal fun DeviceSection(
     }
 }
 
-/** 一台常用设备。管理模式左侧多一个选择圈，右侧的「在用」换成铅笔。 */
+/**
+ * 一台常用设备。管理模式左侧多一个选择圈，右侧的「在用」换成铅笔。
+ *
+ * 底色用 `surfaceContainer` 而不是 `surface` —— 后者在浅色下是 #F7F7F7，
+ * 跟页面背景 #F2F3F5 只差 5，卡片几乎看不出轮廓；深色下又是纯黑，压得过重。
+ * surfaceContainer 是 #FFFFFF / #242424，两种模式下都立得住。
+ */
 @Composable
 private fun FavoriteCard(
     entry: DeviceEntry,
@@ -411,7 +608,7 @@ private fun FavoriteCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(cs.surface)
+            .background(cs.surfaceContainer)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically

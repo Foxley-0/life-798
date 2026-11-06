@@ -28,7 +28,7 @@ object CameraController {
      *
      * 为什么要单独存一份：`unbindAll()` 只是解除绑定，相机硬件还要等
      * ImageAnalysis 的 analyzer 停止送帧、Preview 的 Surface 释放才真正关闭。
-     * 而 analyzer 里跑着 ML Kit，一帧要几百毫秒到几秒，`proxy.close()`
+     * 而 analyzer 里跑着识别器，一帧要几百毫秒，`proxy.close()`
      * 挂在识别完成的回调上 —— 不主动断开，`unbindAll()` 就得一直等。
      *
      * 这两个调用是纯同步的，做完画面立刻消失，不用等 CameraX 的异步关闭。
@@ -48,7 +48,7 @@ object CameraController {
      * 释放相机。调用即生效 —— 不排队、不等协程。
      *
      * 三步都带毫秒计时，慢的时候能一眼看出卡在哪：
-     *   已断开 use case +Nms   ← 卡这里说明 ML Kit 还在处理帧
+     *   已断开 use case +Nms   ← 卡这里说明识别器还在处理帧
      *   unbindAll +Nms ok=     ← 卡这里说明是 CameraX/驱动的问题
      *
      * **bound 只在解绑成功后才清**：以前是先 getAndSet(false) 再操作，

@@ -22,16 +22,26 @@ android {
         applicationId = "com.life798.mini"
         minSdk = 26
         targetSdk = 35
-        versionCode = 25
-        versionName = "1.5.0"
+        // 1.5.5 —— 1.5 线的半代更新（.5 表示半代，不是补丁号）。
+        // versionCode 从 25 跳到 30：中间 26~29 是本地验证包，没发过，
+        // 但可能有装机，留出空档保证从任何测试包都能直接覆盖安装。
+        versionCode = 30
+        versionName = "1.5.5"
 
         buildConfigField("String", "API_GATEWAY", "\"${secret("API_GATEWAY")}\"")
         buildConfigField("String", "APP_SIGN_SALT", "\"${secret("APP_SIGN_SALT")}\"")
 
-        // 只发 64 位。目标环境是 arm64，32 位那套 so 白占 3.1 MiB
-        // （ML Kit 的 libbarhopper_v3.so 光 v7a 版本就占 3.09 MiB）。
+        // 只发 64 位。目标环境是 arm64。
         ndk {
             abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    packaging {
+        // 压缩 .so 打进 APK。minSdk 23 以后默认是「不压缩、直接 mmap」，
+        // 这里开回老式打包，libwxqr.so 从 2.83 MB 压到 1.29 MB。
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 
@@ -122,8 +132,10 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.6.2")
     implementation("androidx.camera:camera-lifecycle:1.6.2")
     implementation("androidx.camera:camera-view:1.6.2")
-    // ML Kit 条码识别：bundled 版，模型打进 APK，不依赖 GMS
-    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    // 扫码：微信二维码引擎（OpenCV WeChatQRCode 精简版），纯离线、不依赖 GMS。
+    // so 在 src/main/jniLibs/arm64-v8a/libwxqr.so，模型在 assets/wxqr/。
+    // 原来的 ML Kit（com.google.mlkit:barcode-scanning）已移除：
+    // 它带的 libbarhopper_v3.so 单个就 4.72 MB，微信引擎含模型才 2.1 MB。
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
