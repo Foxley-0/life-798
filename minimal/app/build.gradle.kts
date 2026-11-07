@@ -22,11 +22,11 @@ android {
         applicationId = "com.life798.mini"
         minSdk = 26
         targetSdk = 35
-        // 1.5.5 —— 1.5 线的半代更新（.5 表示半代，不是补丁号）。
-        // versionCode 从 25 跳到 30：中间 26~29 是本地验证包，没发过，
-        // 但可能有装机，留出空档保证从任何测试包都能直接覆盖安装。
-        versionCode = 30
-        versionName = "1.5.5"
+        // 1.5.5.5 —— 1.5.5 之后的累积更新（弹窗重做、账号隔离修复、水滴图标修复）。
+        // versionCode 从 25 跳到 32：中间 26~31 是本地验证包与 1.5.5，
+        // 留出空档保证从任何测试包都能直接覆盖安装。
+        versionCode = 32
+        versionName = "1.5.5.5"
 
         buildConfigField("String", "API_GATEWAY", "\"${secret("API_GATEWAY")}\"")
         buildConfigField("String", "APP_SIGN_SALT", "\"${secret("APP_SIGN_SALT")}\"")

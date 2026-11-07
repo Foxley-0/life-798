@@ -152,6 +152,16 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private var smsTimer: Job? = null
 
+    /**
+     * 正在跑的账单同步。
+     *
+     * 用它做互斥，而不是 [UiState.billsSyncing] 那个布尔标志：标志只能防重入，
+     * 拦不住「登出后旧同步还在跑」，也没法在换号时把它掐掉。
+     * 协程一旦 cancel，会在下一个挂起点（下一次网络请求）直接抛
+     * CancellationException 退出，不需要在循环里手工查账号。
+     */
+    private var billSyncJob: Job? = null
+
     private val updateApi = UpdateApi()
     private var updateJob: Job? = null
 
@@ -331,6 +341,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun logout() {
+        // 先把还在跑的账单同步掐掉。它握着旧 token，cancel 之后会在下一次
+        // 网络请求处直接退出，不会再往任何账本里写东西 ——
+        // 这是「换账号绝不串数据」的正解，比在循环里逐轮比对账号可靠。
+        billSyncJob?.cancel()
+        billSyncJob = null
+
         viewModelScope.launch {
             prefs.clearSession()
             // 会话记录也要清：换账号登录后不能把上一账号的水认领过来
@@ -341,10 +357,22 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 // 否则会一直卡在加载页
                 ready = true,
                 token = "",
+                // phone 必须一起清 —— 它是账单和设备仓库的存储 key。
+                // 只清磁盘不清内存的话，billStore / devicePrefs 这两个 getter
+                // 仍会造出一个 enabled 的仓库，登出后还在跑的后台任务照样能
+                // 读写上一个账号的数据。清掉之后 enabled 变 false，
+                // 读返回空、写直接短路，隔离由数据层兜住，不再依赖界面门禁。
+                //
+                // 副作用：登录页不再预填上一次的号码。这本来就和冷启动不一致
+                // （clearSession 已经把磁盘上的 phone 删了，重启后同样是空的），
+                // 这里只是把两条路径对齐。
+                phone = "",
                 deviceId = "",
                 deviceName = "",
                 session = null,
                 closed = false,
+                // 同步可能正跑到一半，残留的 true 会让下一个账号永远拉不了账单
+                billsSyncing = false,
                 message = null,
                 messageIsError = false
             )
@@ -365,43 +393,50 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      * 失败时不清本地数据，只把原因放进 [UiState.billsError]。
      */
     fun syncBills() {
+        // 互斥看 Job 而不是 billsSyncing：标志只能防重入，
+        // 判断不了「上一条是不是已经被登出掐掉了」。
+        if (billSyncJob?.isActive == true) return
         val token = _ui.value.token
         if (token.isBlank()) return
-        if (_ui.value.billsSyncing) return
 
-        viewModelScope.launch {
+        // 仓库实例在入口钉死。billStore 是 getter，每访问一次就重读
+        // _ui.value.phone 并 new 一个仓库；补详情是逐条发请求的长循环，
+        // 要是每轮都重新解引用，换号之后后半程就会写到新账号的账本上。
+        //
+        // 光钉死实例还不够保险（cancel 只在挂起点生效），所以登出时
+        // 还会把整条协程 cancel 掉 —— 见 logout()。
+        val store = billStore
+
+        billSyncJob = viewModelScope.launch {
             _ui.value = _ui.value.copy(billsSyncing = true, billsError = null)
 
             when (val list = api.billList(token, page = 0)) {
                 is ApiResult.Err -> {
                     AppLog.w("Bill", "账单列表同步失败: ${list.message}")
                     // 鉴权失效：清凭证回登录页。留一条「同步失败」只会误导用户
-                    if (handleAuthError(list.code)) {
-                        _ui.value = _ui.value.copy(billsSyncing = false)
-                        return@launch
-                    }
+                    if (handleAuthError(list.code)) return@launch
                     _ui.value = _ui.value.copy(billsSyncing = false, billsError = list.message)
                     return@launch
                 }
 
                 is ApiResult.Ok -> {
-                    val added = billStore.merge(list.data)
+                    val added = store.merge(list.data)
                     AppLog.i("Bill", "账单列表 ${list.data.size} 条，新增 $added")
 
                     var filled = 0
                     var failed = 0
-                    for (id in billStore.missingDetail()) {
+                    for (id in store.missingDetail()) {
                         when (val detail = api.billDetail(token, id)) {
                             is ApiResult.Ok -> {
                                 val bill = detail.data
                                 if (bill.liters != null) {
-                                    billStore.updateDetail(id, bill.liters, bill.secs, bill.deviceName)
+                                    store.updateDetail(id, bill.liters, bill.secs, bill.deviceName)
                                     filled++
                                 }
                             }
                             is ApiResult.Err -> {
-                                // 鉴权失效：后面每一条都会失败，跳出循环别再刷请求
-                                if (handleAuthError(detail.code)) break
+                                // 鉴权失效：后面每一条都会失败，别再刷请求
+                                if (handleAuthError(detail.code)) return@launch
                                 failed++
                                 AppLog.w("Bill", "详情失败 id=$id: ${detail.message}")
                             }

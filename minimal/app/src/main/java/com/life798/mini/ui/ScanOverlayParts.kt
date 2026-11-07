@@ -883,7 +883,12 @@ private fun DropGlyph(size: Dp, color: Color, strokeUnits: Float = 2f) {
             arcTo(
                 rect = Rect(cx - r, cy - r, cx + r, cy + r),
                 startAngleDegrees = 180f,
-                sweepAngleDegrees = 180f,
+                // 必须是 -180（逆时针），不能是 +180。
+                // Compose 的 0° 在 3 点方向、正角度顺时针：从 180°（左）扫 +180
+                // 走的是 180 → 270 → 360，也就是**上半圆**，圆肚会鼓到上面去，
+                // 和从顶点下来的两条边交叉，画出来是个「∧」加一个三角洞，
+                // 根本不是水滴。扫 -180 才是 180 → 90 → 0 的下半圆，圆肚朝下。
+                sweepAngleDegrees = -180f,
                 forceMoveTo = false
             )
             cubicTo(cx + r, cy - r * 0.42f, cx + r * 0.40f, cy - r * 1.05f, cx, tip)
