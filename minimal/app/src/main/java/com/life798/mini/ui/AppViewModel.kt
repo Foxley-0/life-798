@@ -7,25 +7,46 @@ import androidx.lifecycle.viewModelScope
 import com.life798.mini.BuildConfig
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
+import com.life798.mini.core.PangguaiLaundryStore
+import com.life798.mini.core.laundry.LaundrySession
 import com.life798.mini.core.BillStore
 import com.life798.mini.core.DevicePrefs
 import com.life798.mini.core.DeviceSession
 import com.life798.mini.core.DeviceSessionStore
-import com.life798.mini.core.Prefs
+import com.life798.mini.core.LoginForm
+import com.life798.mini.core.Platform
+import com.life798.mini.core.PlatformAuth
+import com.life798.mini.core.PlatformSession
+import com.life798.mini.core.PlatformSessionStore
+import com.life798.mini.core.RawSession
+import com.life798.mini.core.SessionState
 import com.life798.mini.core.UpdateInfo
+import com.life798.mini.core.auth.Hui798Auth
+import com.life798.mini.core.auth.PangguaiAuth
+import com.life798.mini.core.isAuthError
 import com.life798.mini.core.isNewerVersion
 import com.life798.mini.net.GithubMirror
+import com.life798.mini.net.PangguaiApi
+import com.life798.mini.net.PangguaiWasherApi
+import com.life798.mini.net.PgWasherLaunch
+import com.life798.mini.net.PgAlipayLaunch
+import com.life798.mini.net.PgSku
+import com.life798.mini.net.PgWasherReady
 import com.life798.mini.net.UpdateApi
 import com.life798.mini.net.WaterApi
 import com.life798.mini.scan.QrParser
 import com.life798.mini.scan.QrResult
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.random.Random
 
@@ -57,17 +78,52 @@ private const val AUTH_CHECK_TIMEOUT_MS = 3000L
 private const val SESSION_FINGERPRINT_INTERVAL_MS = 1000L
 private const val SESSION_FINGERPRINT_ATTEMPTS = 20
 
+/** 支付结果确认：立即查一次，之后最多再查 2 次，间隔 5 秒。 */
+private const val PAY_CONFIRM_ATTEMPTS = 3
+private const val PAY_CONFIRM_INTERVAL_MS = 5000L
+
+/**
+ * 扫码页上「胖乖洗衣机」卡片的状态。
+ *
+ * 只有扫到胖乖码才非 null；798 的扫码流程完全不碰它。
+ * 预检（只读）完成后 [ready] 才有值，用户点按钮才走 [PangguaiWasherApi.launch]。
+ */
+data class PgWasherUi(
+    val nqt: String,
+    val ready: PgWasherReady? = null,
+    /** 当前阶段文案，启动时逐步更新。 */
+    val stage: String = "",
+    val busy: Boolean = false,
+    val error: String? = null,
+    val launched: PgWasherLaunch? = null,
+    /** 用户选中的程序；null = 未选择，界面不默认选中任何一项。 */
+    val selectedSkuId: String? = null,
+    /** `trade/preview/v4.realPrice`，底部应付金额以此为准。 */
+    val payable: String? = null,
+    val quoteLoading: Boolean = false,
+    /** 一次性支付宝唤起事件。 */
+    val alipayLaunch: PgAlipayLaunch? = null,
+    /** 已创建的订单号；响应丢失时复用，绝不重复 create。 */
+    val orderNo: String = "",
+    val paymentSent: Boolean = false,
+)
+
 data class UiState(
     val ready: Boolean = false,
-    val token: String = "",
-    val phone: String = "",
+    /**
+     * 两个平台各自的登录态。**门禁只看这里**：
+     * `accounts.values.any { it.isActive }`，任一平台在线就不回登录页。
+     */
+    val accounts: Map<Platform, PlatformSession> = Platform.entries.associateWith {
+        PlatformSession(it)
+    },
+    /** 两个平台各自的登录表单。切 Tab 不互相冲掉，倒计时也各走各的。 */
+    val forms: Map<Platform, LoginForm> = Platform.entries.associateWith { LoginForm(it) },
+    /** 登录页当前选中的平台；从设置页「添加账号」进来时是目标平台。 */
+    val loginTarget: Platform = Platform.HUI798,
     val deviceId: String = "",
     /** 设备名，来自 `/ui/app/dev/home`。拿不到时为空，界面退化成显示编号。 */
     val deviceName: String = "",
-    val captchaKey: String = "",
-    val captchaImage: ByteArray? = null,
-    val captchaLoading: Boolean = false,
-    val captchaError: String? = null,
     /** 正在启动设备。 */
     val busy: Boolean = false,
     /** 正在关闭设备。和 [busy] 分开，两个按钮各自有自己的转圈。 */
@@ -97,8 +153,9 @@ data class UiState(
     val message: String? = null,
     /** 配合 [message]：true 表示这是错误提示，界面上用错误色。 */
     val messageIsError: Boolean = false,
-    val smsCountdown: Int = 0,
     val configured: Boolean = true,
+    /** 胖乖接口地址是否配置。两个平台各自判断，不互相禁用登录按钮。 */
+    val pangguaiConfigured: Boolean = true,
     /** 正在检查更新，关于页那一行显示「检查中…」。 */
     val updateChecking: Boolean = false,
     /** 检查到的新版本；null 表示没有可提示的更新。 */
@@ -112,33 +169,94 @@ data class UiState(
     /** 正在探测下载线路，按钮显示「准备中…」。 */
     val updatePreparing: Boolean = false,
     /** 探测好的下载地址，界面拿到就打开浏览器并清空。 */
-    val updateDownloadUrl: String? = null
+    val updateDownloadUrl: String? = null,
+    /** 胖乖洗衣机扫码卡片；null 表示当前没有待启动的胖乖设备。 */
+    val pangguaiWasher: PgWasherUi? = null,
+    /** 胖乖洗衣运行态（可多台），与 798 的 [session] 完全独立。 */
+    val laundrySessions: List<LaundrySession> = emptyList(),
 ) {
-    val loggedIn: Boolean get() = token.isNotBlank()
+    fun account(platform: Platform): PlatformSession =
+        accounts[platform] ?: PlatformSession(platform)
+
+    fun form(platform: Platform): LoginForm =
+        forms[platform] ?: LoginForm(platform)
+
+    /**
+     * 主业务（扫码 / 账单 / 设备）的 token，**只指向 798**。
+     *
+     * 绝不能 fallback 到胖乖：798 的接口拿着胖乖的 token 去请求，
+     * 结果是 401，且账单会写进错误的账本。
+     */
+    val token: String get() = account(Platform.HUI798).token
+    val phone: String get() = account(Platform.HUI798).phone
+
+    /** 数据仓库的隔离键，带平台前缀。本期恒为 798，为将来留口子。 */
+    val activeOwnerKey: String get() = account(Platform.HUI798).ownerKey
+
+    /** 门禁：任一平台在线，就不回登录页。 */
+    val loggedIn: Boolean get() = accounts.values.any { it.isActive }
+
+    val hui798Active: Boolean get() = account(Platform.HUI798).isActive
+    val pangguaiActive: Boolean get() = account(Platform.PANGGUAI).isActive
 }
 
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
-    private val prefs = Prefs(app)
     private val api = WaterApi()
+    private val pangguaiApi = PangguaiApi(app)
+
+    /** 胖乖洗衣机启动链路，复用 pangguaiApi 的请求头与信封解析。 */
+    private val washerApi = PangguaiWasherApi(pangguaiApi)
 
     /**
-     * 账单仓库。**按当前登录手机号取**，所以是个 getter 而不是字段 ——
+     * 两个平台的登录实现。登录页按当前平台取对应实现，
+     * 两条链路互不调用、互不影响。
+     */
+    private val auths: Map<Platform, PlatformAuth> = mapOf(
+        Platform.HUI798 to Hui798Auth(api),
+        Platform.PANGGUAI to PangguaiAuth(pangguaiApi),
+    )
+
+    /** 两个平台的登录态落盘。key 由 `Platform.prefix` 统一生成。 */
+    private val sessionPrefs = PlatformSessionStore(app)
+
+    /**
+     * 账单仓库。**按当前 798 登录手机号取**，所以是个 getter 而不是字段 ——
      * 换账号后拿到的自然是另一个 key 的账本。构造成本只有一个 SP 引用，可以随便建。
+     *
+     * 本期主业务仍然只属于 798；胖乖只维护登录态，不产生账单。
      */
     private val billStore: BillStore
-        get() = BillStore(app, _ui.value.phone)
+        get() = BillStore(app, _ui.value.phone, Platform.HUI798)
 
     /** 常用设备 + 最近 7 天流水。同样按手机号隔离，跟账单各管各的。 */
     private val devicePrefs: DevicePrefs
-        get() = DevicePrefs(app, _ui.value.phone)
+        get() = DevicePrefs(app, _ui.value.phone, Platform.HUI798)
 
     /** 当前会话的落盘记录，用来在进程被杀后重新认领「还在流水」的设备。 */
-    private val sessionStore = DeviceSessionStore(app)
+    private val sessionStore = DeviceSessionStore(app, Platform.HUI798)
 
-    private val _ui = MutableStateFlow(UiState(configured = api.isConfigured))
+    private val _ui = MutableStateFlow(
+        UiState(
+            configured = api.isConfigured,
+            pangguaiConfigured = pangguaiApi.isConfigured,
+        )
+    )
+
+    private val laundryStore = PangguaiLaundryStore(app)
+
+    /** 运行态轮询与落盘，独立于 798 的会话链路。 */
+    private val laundryController = LaundryController(
+        scope = viewModelScope,
+        api = washerApi,
+        store = laundryStore,
+        tokenProvider = { _ui.value.account(Platform.PANGGUAI).token },
+        emit = { list -> _ui.update { it.copy(laundrySessions = list) } },
+    )
 
     init {
+        // 冷启动先恢复未结束的洗衣记录，卡片与倒计时不会被重启清掉
+        laundryController.restore()
         // 「按账号隔离」之前的单份数据已经分不清是谁的了，启动时清一次。
         // 新 key（bills_<owner> / favorites_<owner>）一个都不碰。
         BillStore.clearLegacy(app)
@@ -150,7 +268,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private var lastRejectAt = 0L
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
-    private var smsTimer: Job? = null
+    /** 两个平台的短信倒计时各走各的，退出一个平台不影响另一个的计时。 */
+    private val smsTimers = mutableMapOf<Platform, Job>()
 
     /**
      * 正在跑的账单同步。
@@ -174,209 +293,280 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
 
         viewModelScope.launch {
-            val token = prefs.token.first()
-            val phone = prefs.phone.first()
+            val stored = sessionPrefs.loadAll()
+            _ui.update { it.copy(accounts = stored, ready = false) }
 
-            if (token.isBlank()) {
-                _ui.value = _ui.value.copy(ready = true, phone = phone)
-                refreshCaptcha()
-                return@launch
+            // 两个平台并行校验。任一通过就足以放行；
+            // 某个平台网络失败不影响另一个平台，也不把人挡在门外。
+            val pending = stored.values.filter { it.token.isNotBlank() }
+            supervisorScope {
+                pending.map { session ->
+                    async { verifyStored(session) }
+                }.awaitAll()
             }
 
-            // 带着上次的 token 进来：先确认它还有效，再放行。
-            //
-            // 之前是直接 ready = true 进首页，然后靠各个请求自己撞 401 ——
-            // 结果是用户先看到首页，再被「同步失败」之类的错误陆续踢出来，
-            // 期间还在用已经失效的身份发请求。
-            // 这里 ready 先留 false（LOADING），校验完再放行，首页不会闪一下。
-            _ui.value = _ui.value.copy(phone = phone, token = token, ready = false)
-            val result = withTimeoutOrNull(AUTH_CHECK_TIMEOUT_MS) { api.viewInfo(token) }
-            when {
-                result is ApiResult.Ok -> {
-                    AppLog.i("Auth", "冷启动校验通过 uid=${result.data}")
-                    _ui.value = _ui.value.copy(ready = true)
-                    restoreSession(token)
-                }
+            _ui.update { it.copy(ready = true) }
 
-                result is ApiResult.Err && result.code == -99 -> {
-                    AppLog.w("Auth", "冷启动校验：凭证已失效，清除")
-                    // logout 会把 ready 置回 true 并刷新验证码
-                    logout()
-                }
+            if (_ui.value.hui798Active) {
+                restoreSession(_ui.value.token)
+            } else {
+                // 798 没登录（或已失效）也要准备好验证码，用户随时可以补登
+                refreshCaptcha(Platform.HUI798)
+            }
+        }
+    }
 
-                else -> {
-                    // 超时或网络失败：不能因为没网就把人挡在门外，
-                    // 按已登录放行，真过期了下一个请求会走 handleAuthError
-                    AppLog.w("Auth", "冷启动校验未完成，按已登录放行")
-                    _ui.value = _ui.value.copy(ready = true)
-                    restoreSession(token)
-                }
+    /**
+     * 冷启动校验一个平台。
+     *
+     * - 通过：标记 ACTIVE，并以服务端返回的手机号为准（防止磁盘上的 phone 与 token 不匹配）
+     * - 明确失效：标记 EXPIRED，只清这个平台
+     * - 超时 / 网络失败：按已登录放行，沿用原有策略；真过期了下一次业务请求会走 handleAuthError
+     */
+    private suspend fun verifyStored(session: PlatformSession) {
+        val auth = auths[session.platform] ?: return
+        val result = withTimeoutOrNull(AUTH_CHECK_TIMEOUT_MS) { auth.verify(session.token) }
+        when {
+            result is ApiResult.Ok -> {
+                AppLog.i("Auth", "${session.platform.label} 冷启动校验通过")
+                markActive(
+                    platform = session.platform,
+                    token = session.token,
+                    uid = session.uid,
+                    phone = result.data.ifBlank { session.phone },
+                )
+            }
+
+            result is ApiResult.Err && isAuthError(session.platform, result.code) -> {
+                AppLog.w("Auth", "${session.platform.label} 凭证已失效 code=${result.code}，清除")
+                markExpired(session.platform)
+            }
+
+            else -> {
+                AppLog.w("Auth", "${session.platform.label} 冷启动校验未完成，按已登录放行")
             }
         }
     }
 
     // ---------------- 登录 ----------------
 
-    fun refreshCaptcha() {
-        if (!api.isConfigured) {
-            _ui.value = _ui.value.copy(
-                captchaLoading = false,
-                captchaImage = null,
-                captchaError = "未配置 API 网关"
-            )
+    /**
+     * 刷新图形验证码。只有 798 需要，胖乖直接返回。
+     *
+     * 每个平台各存一份，互不覆盖。
+     */
+    fun refreshCaptcha(platform: Platform) {
+        if (!platform.needsGraphCaptcha) return
+        val auth = auths[platform] ?: return
+
+        if (platform == Platform.HUI798 && !api.isConfigured) {
+            updateForm(platform) {
+                it.copy(captchaLoading = false, captchaImage = null, captchaError = "未配置 API 网关")
+            }
             return
         }
+
         viewModelScope.launch {
-            _ui.value = _ui.value.copy(captchaLoading = true, captchaError = null)
+            updateForm(platform) { it.copy(captchaLoading = true, captchaError = null) }
             val key = randomKey()
-            when (val r = api.captcha(key)) {
+            when (val r = auth.captcha(key)) {
                 is ApiResult.Ok -> {
-                    AppLog.i("Login", "验证码已加载 ${r.data.size}B")
-                    _ui.value = _ui.value.copy(
-                        captchaLoading = false,
-                        captchaKey = key,
-                        captchaImage = r.data,
-                        captchaError = null
-                    )
-                }
-
-                is ApiResult.Err -> {
-                    AppLog.w("Login", "验证码加载失败: ${r.message}")
-                    _ui.value = _ui.value.copy(
-                        captchaLoading = false,
-                        captchaImage = null,
-                        captchaError = r.message
-                    )
-                }
-            }
-        }
-    }
-
-    fun sendSms(phone: String, graphCode: String) {
-        if (phone.isBlank()) return note("请输入手机号")
-        if (graphCode.isBlank()) return note("请输入图形验证码")
-        if (_ui.value.smsCountdown > 0) return
-
-        viewModelScope.launch {
-            _ui.value = _ui.value.copy(busy = true, message = null)
-            when (val r = api.sendSms(phone.trim(), graphCode.trim(), _ui.value.captchaKey)) {
-                is ApiResult.Ok -> {
-                    AppLog.i("Login", "短信已发送 → ${AppLog.maskPhone(phone)}")
-                    _ui.value = _ui.value.copy(
-                        busy = false,
-                        message = "验证码已发送",
-                        messageIsError = false
-                    )
-                    startSmsCountdown()
-                }
-
-                is ApiResult.Err -> {
-                    AppLog.w("Login", "发送短信失败: ${r.message}")
-                    _ui.value = _ui.value.copy(
-                        busy = false,
-                        message = r.message,
-                        messageIsError = true
-                    )
-                    refreshCaptcha()
-                }
-            }
-        }
-    }
-
-    fun login(phone: String, smsCode: String) {
-        if (phone.isBlank()) return note("请输入手机号")
-        if (smsCode.isBlank()) return note("请输入短信验证码")
-
-        viewModelScope.launch {
-            _ui.value = _ui.value.copy(busy = true, message = null)
-            when (val r = api.login(phone.trim(), smsCode.trim())) {
-                is ApiResult.Ok -> {
-                    val session = r.data
-                    val uid = when (val info = api.viewInfo(session.token)) {
-                        is ApiResult.Ok -> info.data
-                        is ApiResult.Err -> {
-                            AppLog.w("Login", "取 uid 失败: ${info.message}")
-                            ""
-                        }
+                    AppLog.i("Login", "${platform.label} 验证码已加载 ${r.data.size}B")
+                    updateForm(platform) {
+                        it.copy(
+                            captchaLoading = false,
+                            captchaKey = key,
+                            captchaImage = r.data,
+                            captchaError = null,
+                        )
                     }
-                    prefs.saveSession(session.token, uid, session.phone)
-                    AppLog.i(
-                        "Login",
-                        "登录成功 uid=$uid token=${AppLog.mask(session.token)}"
-                    )
-                    _ui.value = _ui.value.copy(
-                        busy = false,
-                        token = session.token,
-                        phone = session.phone,
-                        message = null
-                    )
                 }
 
                 is ApiResult.Err -> {
-                    AppLog.w("Login", "登录失败: ${r.message} (code=${r.code})")
-                    _ui.value = _ui.value.copy(
-                        busy = false,
-                        message = r.message,
-                        messageIsError = true
-                    )
+                    AppLog.w("Login", "${platform.label} 验证码加载失败: ${r.message}")
+                    updateForm(platform) {
+                        it.copy(
+                            captchaLoading = false,
+                            captchaImage = null,
+                            captchaError = r.message,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun sendSms(platform: Platform, phone: String, graphCode: String) {
+        if (phone.isBlank()) return note(platform, "请输入手机号")
+        if (platform.needsGraphCaptcha && graphCode.isBlank()) {
+            return note(platform, "请输入图形验证码")
+        }
+        val form = _ui.value.form(platform)
+        if (form.countdown > 0) return
+        val auth = auths[platform] ?: return
+
+        viewModelScope.launch {
+            updateForm(platform) { it.copy(busy = true, message = null) }
+            val r = auth.sendSms(phone.trim(), graphCode.trim(), form.captchaKey)
+            when (r) {
+                is ApiResult.Ok -> {
+                    AppLog.i("Login", "${platform.label} 短信已发送 → ${AppLog.maskPhone(phone)}")
+                    updateForm(platform) {
+                        it.copy(busy = false, message = "验证码已发送", messageIsError = false)
+                    }
+                    startSmsCountdown(platform)
+                }
+
+                is ApiResult.Err -> {
+                    AppLog.w("Login", "${platform.label} 发送短信失败: ${r.message}")
+                    updateForm(platform) {
+                        it.copy(busy = false, message = r.message, messageIsError = true)
+                    }
+                    // 图形码是一次性的，发码失败要换一张
+                    if (platform.needsGraphCaptcha) refreshCaptcha(platform)
                 }
             }
         }
     }
 
     /**
-     * 统一的鉴权失败出口。服务端用 `-99` / `-21` 表示登录态失效。
+     * 登录。
      *
-     * 之前只有启动/关闭设备两处处理了它，账单同步、账单详情、设备名、
-     * 冷启动对账全漏了 —— 表现为 token 过期后页面一直挂着「同步失败」，
-     * 凭证不清、页面也不跳，用户只能自己去设置里退出登录。
+     * 只写当前平台的三个 key，另一平台的会话与数据一个字节都不碰 ——
+     * 这是「两套登录互不冲突、可共存」的落点。
      */
-    private fun handleAuthError(code: Int): Boolean {
-        // -99：登录态整体失效
-        // -21：设备控制需要单独的登录信息，服务端在设备侧再校验一次，同样是重登才能恢复
-        if (code != -99 && code != -21) return false
-        AppLog.w("Auth", "登录态失效 code=$code，清除凭证并回登录页")
-        logout()
+    fun login(platform: Platform, phone: String, smsCode: String) {
+        if (phone.isBlank()) return note(platform, "请输入手机号")
+        if (smsCode.isBlank()) return note(platform, "请输入短信验证码")
+        val auth = auths[platform] ?: return
+
+        viewModelScope.launch {
+            updateForm(platform) { it.copy(busy = true, message = null) }
+            when (val r = auth.login(phone.trim(), smsCode.trim())) {
+                is ApiResult.Ok -> {
+                    val session = r.data
+                    sessionPrefs.save(platform, session.token, session.uid, session.phone)
+                    AppLog.i(
+                        "Login",
+                        "${platform.label} 登录成功 uid=${session.uid} token=${AppLog.mask(session.token)}"
+                    )
+                    _ui.update { state ->
+                        state.copy(
+                            accounts = state.accounts + (
+                                platform to PlatformSession(
+                                    platform = platform,
+                                    token = session.token,
+                                    uid = session.uid,
+                                    phone = session.phone,
+                                    state = SessionState.ACTIVE,
+                                )
+                                ),
+                            forms = state.forms + (platform to LoginForm(platform)),
+                            loginTarget = platform,
+                        )
+                    }
+                    // 只有 798 有主业务需要恢复（会话认领、账单同步）
+                    if (platform == Platform.HUI798) restoreSession(session.token)
+                }
+
+                is ApiResult.Err -> {
+                    AppLog.w("Login", "${platform.label} 登录失败: ${r.message} (code=${r.code})")
+                    updateForm(platform) {
+                        it.copy(busy = false, message = r.message, messageIsError = true)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 登录表单输入。只改当前平台，另一个平台的内容原样保留。
+     *
+     * 传 null 表示这一项不动；传空串表示清空。
+     */
+    fun updateLoginForm(
+        platform: Platform,
+        phone: String? = null,
+        graphCode: String? = null,
+        smsCode: String? = null,
+    ) {
+        updateForm(platform) {
+            it.copy(
+                phone = phone ?: it.phone,
+                graphCode = graphCode ?: it.graphCode,
+                smsCode = smsCode ?: it.smsCode,
+            )
+        }
+    }
+
+    /** 从设置页进入「添加账号」时，指定登录页默认选中哪个平台。 */
+    fun beginAddAccount(platform: Platform) {
+        _ui.update { it.copy(loginTarget = platform) }
+    }
+
+    /** 登录页切换平台。首登时两个 Tab 都可以点。 */
+    fun selectLoginPlatform(platform: Platform) {
+        _ui.update { it.copy(loginTarget = platform) }
+        if (platform.needsGraphCaptcha && _ui.value.form(platform).captchaImage == null) {
+            refreshCaptcha(platform)
+        }
+    }
+
+    /**
+     * 统一的鉴权失败出口。
+     *
+     * **只清出问题的那个平台**：另一个平台仍在线时，不跳页、不切换、不弹登录页。
+     * 两个平台功能不同，拿一个平台的会话去顶另一个平台的业务没有意义。
+     */
+    private suspend fun handleAuthError(platform: Platform, code: Int): Boolean {
+        if (!isAuthError(platform, code)) return false
+        AppLog.w("Auth", "${platform.label} 登录态失效 code=$code，只清除该平台")
+        markExpired(platform)
         return true
     }
 
-    fun logout() {
-        // 先把还在跑的账单同步掐掉。它握着旧 token，cancel 之后会在下一次
-        // 网络请求处直接退出，不会再往任何账本里写东西 ——
-        // 这是「换账号绝不串数据」的正解，比在循环里逐轮比对账号可靠。
-        billSyncJob?.cancel()
-        billSyncJob = null
+    /**
+     * 退出登录。**只退出指定的平台。**
+     *
+     * 退出胖乖时，798 的 token、账单、常用设备、用水会话全部原样保留；
+     * 退出 798 时，胖乖的登录态也不受影响。
+     */
+    fun logout(platform: Platform) {
+        // 798 才有的后台任务：账单同步握着旧 token，必须先掐掉
+        if (platform == Platform.HUI798) {
+            billSyncJob?.cancel()
+            billSyncJob = null
+        }
 
         viewModelScope.launch {
-            prefs.clearSession()
-            // 会话记录也要清：换账号登录后不能把上一账号的水认领过来
-            sessionStore.clear()
-            // 设备号也要清：否则重新登录后可能对着上一台设备直接点启动
-            _ui.value = _ui.value.copy(
-                // 冷启动校验失败时是从 ready=false 进来的，这里必须置回 true，
-                // 否则会一直卡在加载页
-                ready = true,
-                token = "",
-                // phone 必须一起清 —— 它是账单和设备仓库的存储 key。
-                // 只清磁盘不清内存的话，billStore / devicePrefs 这两个 getter
-                // 仍会造出一个 enabled 的仓库，登出后还在跑的后台任务照样能
-                // 读写上一个账号的数据。清掉之后 enabled 变 false，
-                // 读返回空、写直接短路，隔离由数据层兜住，不再依赖界面门禁。
-                //
-                // 副作用：登录页不再预填上一次的号码。这本来就和冷启动不一致
-                // （clearSession 已经把磁盘上的 phone 删了，重启后同样是空的），
-                // 这里只是把两条路径对齐。
-                phone = "",
-                deviceId = "",
-                deviceName = "",
-                session = null,
-                closed = false,
-                // 同步可能正跑到一半，残留的 true 会让下一个账号永远拉不了账单
-                billsSyncing = false,
-                message = null,
-                messageIsError = false
-            )
-            refreshCaptcha()
+            sessionPrefs.clear(platform)
+            if (platform == Platform.HUI798) {
+                // 会话记录也要清：换账号登录后不能把上一账号的水认领过来
+                sessionStore.clear()
+            }
+
+            _ui.update { state ->
+                val is798 = platform == Platform.HUI798
+                state.copy(
+                    // 冷启动校验失败时是从 ready=false 进来的，这里必须置回 true，
+                    // 否则会一直卡在加载页
+                    ready = true,
+                    accounts = state.accounts + (platform to PlatformSession(platform)),
+                    forms = state.forms + (platform to LoginForm(platform)),
+                    // phone 是账单和设备仓库的存储 key，必须和账号一起清；
+                    // 只清磁盘不清内存的话，getter 仍会造出 enabled 的仓库
+                    deviceId = if (is798) "" else state.deviceId,
+                    deviceName = if (is798) "" else state.deviceName,
+                    session = if (is798) null else state.session,
+                    closed = if (is798) false else state.closed,
+                    // 同步可能正跑到一半，残留的 true 会让下一个账号永远拉不了账单
+                    billsSyncing = if (is798) false else state.billsSyncing,
+                    message = null,
+                    messageIsError = false,
+                )
+            }
+
+            if (platform == Platform.HUI798) refreshCaptcha(Platform.HUI798)
         }
     }
 
@@ -414,7 +604,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 is ApiResult.Err -> {
                     AppLog.w("Bill", "账单列表同步失败: ${list.message}")
                     // 鉴权失效：清凭证回登录页。留一条「同步失败」只会误导用户
-                    if (handleAuthError(list.code)) return@launch
+                    if (handleAuthError(Platform.HUI798, list.code)) return@launch
                     _ui.value = _ui.value.copy(billsSyncing = false, billsError = list.message)
                     return@launch
                 }
@@ -436,7 +626,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                             }
                             is ApiResult.Err -> {
                                 // 鉴权失效：后面每一条都会失败，别再刷请求
-                                if (handleAuthError(detail.code)) return@launch
+                                if (handleAuthError(Platform.HUI798, detail.code)) return@launch
                                 failed++
                                 AppLog.w("Bill", "详情失败 id=$id: ${detail.message}")
                             }
@@ -474,7 +664,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     deviceId = r.deviceId,
                     deviceName = if (sameDevice) cur.deviceName else "",
                     closed = if (sameDevice) cur.closed else false,
-                    message = null
+                    message = null,
+                    // 扫到 798 设备就把上一张胖乖卡片收起来，两个平台不同屏
+                    pangguaiWasher = null
                 )
                 if (!sameDevice || cur.deviceName.isBlank()) loadDeviceName(r.deviceId)
                 // 记一笔使用流水（不去重，同一台扫几次就记几条）。
@@ -489,9 +681,41 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 true
             }
 
+            is QrResult.Pangguai -> {
+                AppLog.i("Scan", "胖乖设备码 nqt=${r.nqt} host=${r.host.ifBlank { "(裸NQT)" }}")
+                if (!_ui.value.pangguaiActive) {
+                    rejectOnce(r.nqt, "请先在设置页登录胖乖生活")
+                    false
+                } else {
+                    // 先落一张「识别中」的卡片，再异步跑只读预检。
+                    // 返回 true 让扫码页停相机；MainActivity 看到 pangguaiWasher 就不会
+                    // 往栈上 push 798 的启动页，用户留在扫码页点「启动桶自洁」。
+                    _ui.update {
+                        it.copy(
+                            pangguaiWasher = PgWasherUi(
+                                nqt = r.nqt,
+                                stage = "正在识别设备…",
+                                busy = true,
+                            ),
+                            message = null,
+                        )
+                    }
+                    preparePangguaiWasher(r.nqt)
+                    true
+                }
+            }
+
+            is QrResult.PangguaiWater -> {
+                // MainActivity 已在扫码回调里把用水设备分流给 PangguaiWaterViewModel，
+                // 这里只作 when 穷尽兜底，正常不会走到。
+                AppLog.w("Scan", "胖乖用水设备码误入 798 处理 sn=${r.sn}")
+                rejectOnce(r.sn, "请重新扫描用水设备")
+                false
+            }
+
             is QrResult.WrongPlatform -> {
-                AppLog.w("Scan", "非慧生活798设备 host=${r.host}")
-                rejectOnce(r.host, "非慧生活798设备，请使用对应 App 扫码")
+                AppLog.w("Scan", "非本应用支持的设备 host=${r.host}")
+                rejectOnce(r.host, "非慧生活798 / 胖乖生活设备，请使用对应 App 扫码")
                 false
             }
 
@@ -501,6 +725,307 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 false
             }
         }
+    }
+
+    // ---------------- 胖乖洗衣机（本期只做 0 元桶自洁） ----------------
+
+    /** 扫码后的只读预检：识别设备 → 读详情 → 找 0 元桶自洁 SKU。不创建订单。 */
+    private fun preparePangguaiWasher(nqt: String) {
+        val token = _ui.value.account(Platform.PANGGUAI).token
+        if (token.isBlank()) {
+            _ui.update {
+                it.copy(
+                    pangguaiWasher = it.pangguaiWasher?.copy(
+                        busy = false,
+                        stage = "",
+                        error = "胖乖登录态已失效，请到设置页重新登录",
+                    )
+                )
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            when (
+                val r = washerApi.prepare(token, nqt) { stage ->
+                    _ui.update {
+                        it.copy(pangguaiWasher = it.pangguaiWasher?.copy(stage = stage))
+                    }
+                }
+            ) {
+                is ApiResult.Ok -> _ui.update {
+                    it.copy(
+                        pangguaiWasher = it.pangguaiWasher?.copy(
+                            ready = r.data, busy = false, stage = "", error = null,
+                        )
+                    )
+                }
+
+                is ApiResult.Err -> {
+                    AppLog.w("Pangguai", "扫码预检失败: ${r.message}")
+                    _ui.update {
+                        it.copy(
+                            pangguaiWasher = it.pangguaiWasher?.copy(
+                                busy = false, stage = "", error = r.message,
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /** 用户点「启动桶自洁」：整个工程里唯一会创建胖乖订单并启动设备的入口。 */
+    /** 选中洗衣程序：不默认选，选中后才拉服务端应付价。 */
+    fun selectPangguaiSku(skuId: String) {
+        val cur = _ui.value.pangguaiWasher ?: return
+        val ready = cur.ready ?: return
+        if (cur.busy || ready.skus.none { it.skuId == skuId }) return
+        _ui.update {
+            it.copy(
+                pangguaiWasher = it.pangguaiWasher?.copy(
+                    selectedSkuId = skuId, payable = null, quoteLoading = true, error = null,
+                )
+            )
+        }
+        val token = _ui.value.account(Platform.PANGGUAI).token
+        if (token.isBlank()) return note("胖乖登录态已失效，请到设置页重新登录")
+        viewModelScope.launch {
+            when (val r = washerApi.preview(token, ready.goods.goodsId, skuId)) {
+                is ApiResult.Ok -> _ui.update {
+                    it.copy(
+                        pangguaiWasher = it.pangguaiWasher?.copy(
+                            payable = r.data.price, quoteLoading = false,
+                        )
+                    )
+                }
+
+                is ApiResult.Err -> _ui.update {
+                    it.copy(
+                        pangguaiWasher = it.pangguaiWasher?.copy(
+                            quoteLoading = false, error = r.message,
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /** 「选好了」：0 元走原有启动链路，付费走支付宝。 */
+    fun startPangguaiSelfClean() {
+        val cur = _ui.value.pangguaiWasher ?: return
+        val ready = cur.ready ?: return
+        val skuId = cur.selectedSkuId ?: return note("请先选择洗衣程序")
+        val sku = ready.skus.firstOrNull { it.skuId == skuId }
+            ?: return note("洗衣程序已变化，请重新选择")
+        if (cur.busy || cur.paymentSent) return
+
+        val token = _ui.value.account(Platform.PANGGUAI).token
+        if (token.isBlank()) return note("胖乖登录态已失效，请到设置页重新登录")
+
+        val price = cur.payable ?: sku.price
+        if (isZeroPrice(price)) startZeroAmount(token, ready.copy(sku = sku))
+        else startAlipay(token, ready, sku, price)
+    }
+
+    /** 0 元（桶自洁）：沿用抓包验证过的完整链路。 */
+    private fun startZeroAmount(token: String, ready: PgWasherReady) {
+        _ui.update {
+            it.copy(
+                pangguaiWasher = it.pangguaiWasher?.copy(
+                    busy = true, stage = "准备启动…", error = null, launched = null,
+                )
+            )
+        }
+        viewModelScope.launch {
+            when (
+                val r = washerApi.launch(token, ready) { stage ->
+                    _ui.update {
+                        it.copy(pangguaiWasher = it.pangguaiWasher?.copy(stage = stage))
+                    }
+                }
+            ) {
+                is ApiResult.Ok -> {
+                    AppLog.i("Pangguai", "桶自洁启动成功 orderNo=${r.data.orderNo}")
+                    recordLaundry(ready, ready.sku, r.data.orderNo, r.data.price)
+                }
+
+                is ApiResult.Err -> {
+                    AppLog.w("Pangguai", "桶自洁启动失败: ${r.message}")
+                    failPangguai(r.message)
+                }
+            }
+        }
+    }
+
+    /**
+     * 付费段：渠道校验 → 设备检查 → 创建订单 → 取支付宝签名串。
+     * 已创建的 orderNo 会复用，绝不重复 create；**不在这里判付款成功**。
+     */
+    private fun startAlipay(token: String, ready: PgWasherReady, sku: PgSku, price: String) {
+        _ui.update {
+            it.copy(
+                pangguaiWasher = it.pangguaiWasher?.copy(
+                    busy = true, paymentSent = true, stage = "正在创建订单…", error = null,
+                )
+            )
+        }
+        viewModelScope.launch {
+            val existing = _ui.value.pangguaiWasher?.orderNo.orEmpty()
+            val orderNo = if (existing.isNotBlank()) existing else when (
+                val r = washerApi.createPaidOrder(
+                    token = token,
+                    goodsId = ready.goods.goodsId,
+                    skuId = sku.skuId,
+                    price = price,
+                    imei = ready.goods.imei,
+                    shopId = ready.goods.shopId,
+                )
+            ) {
+                is ApiResult.Ok -> r.data
+                is ApiResult.Err -> {
+                    failPangguai(r.message)
+                    return@launch
+                }
+            }
+            _ui.update {
+                it.copy(
+                    pangguaiWasher = it.pangguaiWasher?.copy(
+                        orderNo = orderNo, stage = "正在准备支付宝…",
+                    )
+                )
+            }
+            when (val r = washerApi.prepareAlipay(token, orderNo)) {
+                is ApiResult.Ok -> {
+                    val event = PgAlipayLaunch(System.currentTimeMillis(), orderNo, r.data)
+                    _ui.update {
+                        it.copy(
+                            pangguaiWasher = it.pangguaiWasher?.copy(
+                                alipayLaunch = event, busy = false,
+                                stage = "请在支付宝中完成支付",
+                            )
+                        )
+                    }
+                }
+
+                is ApiResult.Err -> failPangguai(r.message)
+            }
+        }
+    }
+
+    /**
+     * 支付宝 SDK 返回后调用。**SDK 结果不算付款成功**，只以服务端
+     * `order/pay_status` + `machine/device_is_start` 为准。
+     */
+    fun onAlipayReturned(id: Long) {
+        val cur = _ui.value.pangguaiWasher ?: return
+        val event = cur.alipayLaunch ?: return
+        if (event.id != id) return
+        val ready = cur.ready ?: return
+        val skuId = cur.selectedSkuId ?: return
+        val sku = ready.skus.firstOrNull { it.skuId == skuId } ?: return
+        val token = _ui.value.account(Platform.PANGGUAI).token
+        if (token.isBlank()) return note("胖乖登录态已失效，请到设置页重新登录")
+
+        _ui.update {
+            it.copy(
+                pangguaiWasher = it.pangguaiWasher?.copy(
+                    alipayLaunch = null, busy = true, stage = "正在确认支付…",
+                )
+            )
+        }
+        viewModelScope.launch {
+            var paid = false
+            for (i in 1..PAY_CONFIRM_ATTEMPTS) {
+                when (val r = washerApi.orderPaid(token, event.orderNo)) {
+                    is ApiResult.Ok -> if (r.data) {
+                        paid = true
+                        break
+                    }
+
+                    is ApiResult.Err -> {
+                        failPangguai(r.message)
+                        return@launch
+                    }
+                }
+                if (i < PAY_CONFIRM_ATTEMPTS) delay(PAY_CONFIRM_INTERVAL_MS)
+            }
+            if (!paid) {
+                failPangguai("支付尚未完成，可重试或到胖乖生活查看订单 ${event.orderNo.takeLast(8)}")
+                return@launch
+            }
+            val started = washerApi.waitStarted(token, event.orderNo) { stage ->
+                _ui.update {
+                    it.copy(pangguaiWasher = it.pangguaiWasher?.copy(stage = stage))
+                }
+            }
+            if (!started) {
+                failPangguai("已支付但未检测到设备启动，订单号 ${event.orderNo}")
+                return@launch
+            }
+            AppLog.i("Pangguai", "支付宝洗衣启动成功 orderNo=${event.orderNo}")
+            recordLaundry(ready, sku, event.orderNo, cur.payable ?: sku.price)
+        }
+    }
+
+    /** 启动成功后落运行态会话（数据层，界面后续再接）。 */
+    private fun recordLaundry(
+        ready: PgWasherReady,
+        sku: PgSku,
+        orderNo: String,
+        price: String,
+    ) {
+        laundryController.add(
+            LaundrySession(
+                orderNo = orderNo,
+                deviceId = ready.goods.goodsId,
+                deviceName = ready.goods.name,
+                skuId = sku.skuId,
+                skuName = sku.name,
+                shopName = ready.goods.orgName,
+                price = price,
+                minutes = sku.unitMinutes,
+            )
+        )
+        val launch = PgWasherLaunch(
+            orderNo = orderNo,
+            deviceName = ready.goods.name,
+            goodsId = ready.goods.goodsId,
+            skuId = sku.skuId,
+            skuName = sku.name,
+            shopName = ready.goods.orgName,
+            minutes = sku.unitMinutes,
+            price = price,
+        )
+        _ui.update {
+            it.copy(
+                pangguaiWasher = it.pangguaiWasher?.copy(
+                    launched = launch, busy = false, stage = "", error = null,
+                    paymentSent = false, orderNo = "",
+                )
+            )
+        }
+    }
+
+    /** 失败时保留 orderNo 供复用，避免重复下单。 */
+    private fun failPangguai(message: String) {
+        AppLog.w("Pangguai", "启动失败: $message")
+        _ui.update {
+            it.copy(
+                pangguaiWasher = it.pangguaiWasher?.copy(
+                    busy = false, stage = "", error = message,
+                    paymentSent = false, alipayLaunch = null,
+                )
+            )
+        }
+    }
+
+    private fun isZeroPrice(price: String): Boolean =
+        (price.trim().toDoubleOrNull() ?: Double.NaN) == 0.0
+
+    /** 关掉胖乖卡片，回到普通扫码。运行态在 laundrySessions 里，不受影响。 */
+    fun clearPangguaiWasher() {
+        _ui.update { it.copy(pangguaiWasher = null) }
     }
 
     /**
@@ -524,6 +1049,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun startDevice() {
         val s = _ui.value
+        // 主业务只属于 798。只有胖乖在线时，扫码能扫但没有可用身份去启动设备。
+        if (!s.hui798Active) return note("请先登录惠生活798")
         if (s.deviceId.isBlank()) return note("请先扫码添加设备")
         if (s.busy || s.stopping) return
         // 同时只允许一条会话：水还在流的时候再去开另一台，只会让两边都对不上账
@@ -576,7 +1103,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         message = r.message,
                         messageIsError = true
                     )
-                    handleAuthError(r.code)
+                    handleAuthError(Platform.HUI798, r.code)
                 }
             }
         }
@@ -622,7 +1149,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         message = r.message,
                         messageIsError = true
                     )
-                    handleAuthError(r.code)
+                    handleAuthError(Platform.HUI798, r.code)
                 }
             }
         }
@@ -657,7 +1184,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
                 is ApiResult.Err -> {
                     AppLog.w("Device", "设备名获取失败: ${r.message}")
-                    handleAuthError(r.code)
+                    handleAuthError(Platform.HUI798, r.code)
                 }
             }
         }
@@ -713,7 +1240,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     // 网络失败不销毁记录：下次启动还有机会认领，误清就等于把这笔水丢了
                     AppLog.w("Device", "对账失败，保留记录: ${r.message}")
                     // 但鉴权失效不是网络问题 —— 记录留着也没意义，登出会一并清掉
-                    handleAuthError(r.code)
+                    handleAuthError(Platform.HUI798, r.code)
                 }
             }
         }
@@ -725,21 +1252,97 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // ---------------- 内部 ----------------
 
-    private fun startSmsCountdown() {
-        smsTimer?.cancel()
-        smsTimer = viewModelScope.launch {
+    private fun startSmsCountdown(platform: Platform) {
+        smsTimers[platform]?.cancel()
+        smsTimers[platform] = viewModelScope.launch {
             for (i in 60 downTo 1) {
-                _ui.value = _ui.value.copy(smsCountdown = i)
+                updateForm(platform) { it.copy(countdown = i) }
                 delay(1000)
             }
-            _ui.value = _ui.value.copy(smsCountdown = 0)
+            updateForm(platform) { it.copy(countdown = 0) }
         }
     }
 
-    private fun note(msg: String) {
-        _ui.value = _ui.value.copy(message = msg, messageIsError = true)
+    /** 只改一个平台的表单，另一个平台原样保留。 */
+    private inline fun updateForm(
+        platform: Platform,
+        crossinline block: (LoginForm) -> LoginForm,
+    ) {
+        _ui.update { state ->
+            state.copy(forms = state.forms + (platform to block(state.form(platform))))
+        }
+    }
+
+    /** 登录相关的提示写进表单，避免切换平台时看到另一个平台的报错。 */
+    private fun note(platform: Platform, msg: String) {
+        updateForm(platform) { it.copy(message = msg, messageIsError = true) }
         // 系统 Toast：样式和位置由 ROM 决定（vivo 上是白卡+图标，悬浮在底栏上方）
         Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+    }
+
+    /** 非登录场景（扫码、设备）的提示，仍然走全局 message。 */
+    private fun note(msg: String) {
+        _ui.update { it.copy(message = msg, messageIsError = true) }
+        Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+    }
+
+    /** 校验通过：标记 ACTIVE，必要时把服务端返回的号码/uid 回写磁盘。 */
+    private suspend fun markActive(
+        platform: Platform,
+        token: String,
+        uid: String,
+        phone: String,
+    ) {
+        val current = _ui.value.account(platform)
+        val next = current.copy(
+            token = token,
+            uid = uid.ifBlank { current.uid },
+            phone = phone.ifBlank { current.phone },
+            state = SessionState.ACTIVE,
+        )
+        _ui.update { it.copy(accounts = it.accounts + (platform to next)) }
+        if (next.phone != current.phone || next.uid != current.uid) {
+            sessionPrefs.save(platform, next.token, next.uid, next.phone)
+        }
+    }
+
+    /**
+     * 凭证失效：只清这个平台。
+     *
+     * 保留 phone（设置页要显示「138****8888 已失效」，用户才知道该重登哪个号），
+     * 但 token 清空、state 置 EXPIRED —— 所有业务请求都会因为 token 为空而停手。
+     */
+    private suspend fun markExpired(platform: Platform) {
+        val current = _ui.value.account(platform)
+        sessionPrefs.clear(platform)
+
+        if (platform == Platform.HUI798) {
+            billSyncJob?.cancel()
+            billSyncJob = null
+            sessionStore.clear()
+        }
+
+        _ui.update { state ->
+            val is798 = platform == Platform.HUI798
+            state.copy(
+                accounts = state.accounts + (
+                    platform to current.copy(token = "", state = SessionState.EXPIRED)
+                    ),
+                // 重登时预填失效的那个号码，省得用户再输一遍
+                forms = state.forms + (
+                    platform to state.form(platform).copy(
+                        phone = current.phone,
+                        countdown = 0,
+                        busy = false,
+                    )
+                    ),
+                deviceId = if (is798) "" else state.deviceId,
+                deviceName = if (is798) "" else state.deviceName,
+                session = if (is798) null else state.session,
+                closed = if (is798) false else state.closed,
+                billsSyncing = if (is798) false else state.billsSyncing,
+            )
+        }
     }
 
     /**
@@ -765,7 +1368,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
-        smsTimer?.cancel()
+        smsTimers.values.forEach { it.cancel() }
         updateJob?.cancel()
     }
 

@@ -51,13 +51,23 @@ data class BillTotals(val liters: Double, val yuan: Double)
  * 存 SharedPreferences，一个 JSON 数组。3000 条大约 600KB，解析一次几毫秒，
  * 对账本页完全够用，不值得为这点数据引入数据库。
  */
-class BillStore(context: Context, private val owner: String) {
+class BillStore(
+    context: Context,
+    private val owner: String,
+    private val platform: Platform = Platform.HUI798,
+) {
 
     private val sp = context.applicationContext
         .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** 这个账号自己的账本。不同账号互不可见。 */
-    private val key = "$KEY_PREFIX$owner"
+    /**
+     * 这个账号自己的账本。不同账号互不可见。
+     *
+     * 平台前缀在最前面：798 是 `bills_<phone>`（历史 key 不变），
+     * 胖乖是 `pangguai-bills_<phone>`。同一手机号登两个平台时，
+     * 两本账物理隔离，不存在串号的路径。
+     */
+    private val key = "${platform.prefix}$KEY_PREFIX$owner"
 
     /** 没登录就没有账本 —— 防止登出后还读到上一个账号的数据。 */
     private val enabled: Boolean get() = owner.isNotBlank()

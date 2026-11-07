@@ -8,8 +8,9 @@ import com.life798.mini.BuildConfig
  * 日志。
  *
  * 只打 logcat，不写文件、没有应用内日志页 —— 那些会带来存储和隐私成本。
- * release 包完全静默（[BuildConfig.DEBUG] 为 false 时直接返回），
- * debug 包全量输出，排查相机释放、接口失败这些全靠它。
+ * debug 包全量输出；release 包只保留 warn / error —— 真机上唯一能用的排查手段
+ * 就是 root 抓 logcat，之前 release 完全静默导致「设备工作中」这类服务端原因
+ * 在日志里一点痕迹都没有。token / 手机号在调用点已经 mask，不额外落盘。
  *
  * tag 统一加 `798/` 前缀，`adb logcat -s 798/Scan` 就能只看扫码这一路。
  */
@@ -27,12 +28,14 @@ object AppLog {
         if (BuildConfig.DEBUG) Log.i(PREFIX + tag, msg)
     }
 
+    /** 警告：release 也输出，供 root logcat 定位接口业务失败。 */
     fun w(tag: String, msg: String, t: Throwable? = null) {
-        if (BuildConfig.DEBUG) Log.w(PREFIX + tag, msg, t)
+        Log.w(PREFIX + tag, msg, t)
     }
 
+    /** 错误：release 也输出。 */
     fun e(tag: String, msg: String, t: Throwable? = null) {
-        if (BuildConfig.DEBUG) Log.e(PREFIX + tag, msg, t)
+        Log.e(PREFIX + tag, msg, t)
     }
 
     /** token 只保留首 6 位与尾 4 位。 */

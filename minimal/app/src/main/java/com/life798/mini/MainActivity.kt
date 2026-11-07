@@ -53,6 +53,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.life798.mini.core.AppLog
+import com.life798.mini.core.water.PgWaterPhase
+import com.life798.mini.scan.QrParser
+import com.life798.mini.scan.QrResult
+import com.life798.mini.ui.water.PangguaiWaterViewModel
+import com.life798.mini.ui.water.toWaterUi
 import com.life798.mini.core.CameraController
 import com.life798.mini.core.UiPrefs
 import com.life798.mini.ui.AboutPage
@@ -60,6 +65,7 @@ import com.life798.mini.ui.ReferencesScreen
 import com.life798.mini.ui.AppViewModel
 import com.life798.mini.ui.AppearanceScreen
 import com.life798.mini.ui.LoginScreen
+import com.life798.mini.ui.LoginMode
 import com.life798.mini.ui.MainTabsPagerState
 import com.life798.mini.ui.MiniTheme
 import com.life798.mini.ui.components.LocalBarBlurBackdrop
@@ -79,6 +85,7 @@ import com.life798.mini.ui.components.BarBackdropContent
 import com.life798.mini.ui.components.BarBlurHost
 import com.life798.mini.ui.components.barBlurBackground
 import com.life798.mini.ui.isDarkTheme
+import com.life798.mini.ui.PangguaiStartScreen
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
@@ -116,7 +123,7 @@ private const val PAGE_COUNT = 3
  *
  * 返回键只做一件事：出栈。所有页面都不再自己挂 BackHandler。
  */
-private enum class Route { TABS, START, USING, ABOUT, THEME, REFERENCES }
+private enum class Route { TABS, START, USING, ABOUT, THEME, REFERENCES, ADD_ACCOUNT, PANGGUAI_START, PANGGUAI_WATER_START, PANGGUAI_WATER_USING }
 
 private val RouteStackSaver = listSaver<List<String>, String>(
     save = { it },
@@ -205,6 +212,9 @@ private fun MiniApp(
     onAccentMode: (Int) -> Unit,
     onBottomBarStyle: (Int) -> Unit
 ) {
+    // 与 MainContent 共享同一个 Activity 级 ViewModel 实例
+    val waterVm: PangguaiWaterViewModel = viewModel()
+    val waterState by waterVm.state.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -296,7 +306,31 @@ private fun MiniApp(
         }
     }
 
+    // 添加账号成功 → 自动回到设置页。
+    // 本工程的导航就是一个 List<String>，直接出栈即可；不能用返回登录页那条逻辑，
+    // 否则会把下面的 tab 栈一起冲掉。
+    LaunchedEffect(stack.lastOrNull(), state.accounts) {
+        if (stack.lastOrNull() == Route.ADD_ACCOUNT.name &&
+            state.account(state.loginTarget).isActive
+        ) {
+            AppLog.i("Nav", "添加账号成功，自动返回设置页")
+            navForward = false
+            stack = stack.dropLast(1)
+        }
+    }
+
     // 冷启动对账成功（服务端确认还在出水）→ 直接回到用水页。
+    // 胖乖用水启动成功 → 原地把启动页换成用水页（不进栈，返回不会退回旧启动页）
+    LaunchedEffect(waterState.phase, stack) {
+        if (waterState.phase == PgWaterPhase.RUNNING &&
+            stack.lastOrNull() == Route.PANGGUAI_WATER_START.name
+        ) {
+            AppLog.i("Nav", "胖乖用水启动成功，启动页 → 用水页")
+            navForward = true
+            stack = stack.dropLast(1) + Route.PANGGUAI_WATER_USING.name
+        }
+    }
+
     // 用 sessionRestoreTick 而不是 session 本身当键：这是**一次性**信号，
     // 用户自己从用水页返回后不会被立刻拽回去。
     LaunchedEffect(state.sessionRestoreTick) {
@@ -341,6 +375,10 @@ private fun MiniApp(
         stack = stack.dropLast(1)
         // 离开启动页即作废设备编号，必须重新扫码
         if (top == Route.START.name) vm.clearDevice()
+        // 胖乖启动页同理：返回后不留上一台设备的信息
+        if (top == Route.PANGGUAI_START.name) vm.clearPangguaiWasher()
+        // 离开胖乖用水启动页：清掉预检，但不影响已启动的运行态会话
+        if (top == Route.PANGGUAI_WATER_START.name) waterVm.dismiss()
         return true
     }
 
@@ -479,9 +517,13 @@ private fun MainScaffold(
                     Phase.LOADING -> Loading()
                     Phase.LOGIN -> LoginScreen(
                         state = state,
+                        platform = state.loginTarget,
+                        mode = LoginMode.FIRST,
+                        onSelectPlatform = vm::selectLoginPlatform,
                         onRefreshCaptcha = vm::refreshCaptcha,
                         onSendSms = vm::sendSms,
-                        onLogin = vm::login
+                        onLogin = vm::login,
+                        onFormChange = vm::updateLoginForm,
                     )
                     Phase.MAIN -> MainContent(
                         state = state,
@@ -581,6 +623,9 @@ private fun MainContent(
     onAccentMode: (Int) -> Unit,
     onBottomBarStyle: (Int) -> Unit
 ) {
+    // 与 MiniApp 共享同一个 Activity 级 ViewModel 实例
+    val waterVm: PangguaiWaterViewModel = viewModel()
+    val waterState by waterVm.state.collectAsState()
     AnimatedContent(
         targetState = current ?: Route.TABS.name,
         transitionSpec = {
@@ -598,15 +643,36 @@ private fun MainContent(
     ) { route ->
         when (route) {
             Route.START.name -> StartScreen(
-                state = state,
+                view = state.toWaterUi(),
                 onBack = onBack,
                 onStart = vm::startDevice
             )
 
-            Route.USING.name -> UsingScreen(
+            Route.PANGGUAI_START.name -> PangguaiStartScreen(
                 state = state,
                 onBack = onBack,
+                onStart = vm::startPangguaiSelfClean,
+                onSelectSku = vm::selectPangguaiSku,
+                onAlipayResult = vm::onAlipayReturned
+            )
+
+            Route.USING.name -> UsingScreen(
+                view = state.toWaterUi(),
+                onBack = onBack,
                 onStop = vm::stopDevice
+            )
+
+            // 胖乖用水：与 798 共用同一份 StartScreen / UsingScreen 版式，只换数据
+            Route.PANGGUAI_WATER_START.name -> StartScreen(
+                view = waterState.toWaterUi(),
+                onBack = onBack,
+                onStart = waterVm::start
+            )
+
+            Route.PANGGUAI_WATER_USING.name -> UsingScreen(
+                view = waterState.toWaterUi(),
+                onBack = onBack,
+                onStop = waterVm::stop
             )
 
             Route.ABOUT.name -> AboutPage(
@@ -619,6 +685,19 @@ private fun MainContent(
             )
 
             Route.REFERENCES.name -> ReferencesScreen(onBack = onBack)
+
+            // 添加账号：登录页以二级页形式进入，平台已锁定，登录成功只回设置页，
+            // 不会把用户拽回首次登录页，也不会冲掉下面的 tab 栈。
+            Route.ADD_ACCOUNT.name -> LoginScreen(
+                state = state,
+                platform = state.loginTarget,
+                mode = LoginMode.ADD,
+                onBack = onBack,
+                onRefreshCaptcha = vm::refreshCaptcha,
+                onSendSms = vm::sendSms,
+                onLogin = vm::login,
+                onFormChange = vm::updateLoginForm,
+            )
 
             Route.THEME.name -> AppearanceScreen(
                 themeMode = themeMode,
@@ -651,19 +730,39 @@ private fun MainContent(
                             0 -> ScanScreen(
                                 state = state,
                                 onEnter = vm::clearMessage,
-                                onDecoded = vm::onQrDecoded,
+                                onDecoded = { raw ->
+                                    when (val r = QrParser.parse(raw)) {
+                                        is QrResult.PangguaiWater -> {
+                                            // 用水设备码直接交给独立 ViewModel，不经过 AppViewModel
+                                            waterVm.onScan(r.sn)
+                                            true
+                                        }
+                                        else -> vm.onQrDecoded(raw)
+                                    }
+                                },
                                 bottomInset = bottomInset,
                                 // 扫的还是正在出水的那台设备 → 直接回用水页，
                                 // 别让用户对着一个「启动」按钮再点一次
                                 onScanned = {
-                                    val active = state.session
-                                    onPush(
-                                        if (active != null && active.deviceId == state.deviceId) {
-                                            Route.USING
-                                        } else {
-                                            Route.START
-                                        }
-                                    )
+                                    // 扫到胖乖码时 ViewModel 已经落下 pangguaiWasher 卡片，
+                                    // 留在扫码页点「启动桶自洁」，绝不进 798 的启动页。
+                                    // 这里读 StateFlow 的实时值而不是 compose 的 state 快照，
+                                    // 避免重组还没发生就误判成 798。
+                                    if (waterVm.state.value.pending) {
+                                        onPush(Route.PANGGUAI_WATER_START)
+                                    } else if (vm.ui.value.pangguaiWasher != null) {
+                                        // 胖乖洗衣机仍是原来那套程序选择页
+                                        onPush(Route.PANGGUAI_START)
+                                    } else {
+                                        val active = state.session
+                                        onPush(
+                                            if (active != null && active.deviceId == state.deviceId) {
+                                                Route.USING
+                                            } else {
+                                                Route.START
+                                            }
+                                        )
+                                    }
                                 },
                                 // 卡片上的设备行：点哪台进哪台的页面。
                                 // 现在卡里只会出现正在使用的设备，所以一律进用水页；
@@ -683,7 +782,11 @@ private fun MainContent(
                                 bottomInset = bottomInset,
                                 onOpenAppearance = { onPush(Route.THEME) },
                                 onOpenAbout = { onPush(Route.ABOUT) },
-                                onLogout = vm::logout
+                                onAddAccount = { platform ->
+                                    vm.beginAddAccount(platform)
+                                    onPush(Route.ADD_ACCOUNT)
+                                },
+                                onLogout = { platform -> vm.logout(platform) },
                             )
                         }
                     }

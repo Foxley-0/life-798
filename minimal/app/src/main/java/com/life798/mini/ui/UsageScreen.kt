@@ -76,8 +76,9 @@ private data class BillSnapshot(
 @Composable
 fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
     val context = LocalContext.current
-    // 账本按手机号隔离：换账号就是另一个 key，跟上一个账号毫无关系
-    val store = remember(state.phone) { BillStore(context, state.phone) }
+    // 账本按「平台 + 手机号」隔离。key 用 activeOwnerKey 而不是 phone：
+    // 同一手机号两个平台的 phone 相同，只用 phone 不会重建仓库，会读错账本。
+    val store = remember(state.activeOwnerKey) { BillStore(context, state.phone) }
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
 
     // 有账单的年份 / 月份，滚轮里只出现这些，空月份转不到
@@ -151,6 +152,28 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
                         count = snapshot.bills.size,
                         onClick = { showPicker = true }
                     )
+                }
+
+                // 798 没登录：账本属于 798，这里不展示任何数据，只说明去哪里登录。
+                // 不回登录页 —— 另一个平台可能还在线，门禁由 UiState.loggedIn 统一判断。
+                if (!state.hui798Active) {
+                    item(key = "no-account") {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text(
+                                    text = "惠生活798 未登录",
+                                    fontSize = 15.sp,
+                                    color = MiuixTheme.colorScheme.onSurface,
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "账本与扫码都只属于 798 账号，请到设置页登录后查看。",
+                                    fontSize = 13.sp,
+                                    color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                                )
+                            }
+                        }
+                    }
                 }
 
                 // 同步失败：本地数据照常显示，只在这里提一句

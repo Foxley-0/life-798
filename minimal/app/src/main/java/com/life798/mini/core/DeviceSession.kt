@@ -29,13 +29,22 @@ data class DeviceSession(
  * 存在 SharedPreferences 里，`commit()` 同步落盘 —— 启动成功后进程立刻被杀，
  * 这条记录也不能丢，否则重开 App 就不知道还有设备在流水。
  */
-class DeviceSessionStore(context: Context) {
+class DeviceSessionStore(
+    context: Context,
+    platform: Platform = Platform.HUI798,
+) {
 
     private val sp = context.applicationContext
         .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /**
+     * 798 是 `current`（历史 key 不变），胖乖是 `pangguai-current`。
+     * 本期胖乖不产生用水会话，但 key 先按平台分开，避免将来接入时串到 798 的会话上。
+     */
+    private val keySession = "${platform.prefix}$KEY_SESSION"
+
     fun load(): DeviceSession? {
-        val raw = sp.getString(KEY_SESSION, null) ?: return null
+        val raw = sp.getString(keySession, null) ?: return null
         return runCatching {
             val obj = JSONObject(raw)
             val id = obj.optString("id")
@@ -55,11 +64,11 @@ class DeviceSessionStore(context: Context) {
             .put("at", session.startedAt)
         session.deviceName?.let { obj.put("name", it) }
         session.sessionTime?.let { obj.put("st", it) }
-        sp.edit().putString(KEY_SESSION, obj.toString()).commit()
+        sp.edit().putString(keySession, obj.toString()).commit()
     }
 
     fun clear() {
-        sp.edit().remove(KEY_SESSION).commit()
+        sp.edit().remove(keySession).commit()
     }
 
     private companion object {

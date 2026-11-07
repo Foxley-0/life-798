@@ -22,14 +22,19 @@ android {
         applicationId = "com.life798.mini"
         minSdk = 26
         targetSdk = 35
-        // 1.5.5.5 —— 1.5.5 之后的累积更新（弹窗重做、账号隔离修复、水滴图标修复）。
-        // versionCode 从 25 跳到 32：中间 26~31 是本地验证包与 1.5.5，
-        // 留出空档保证从任何测试包都能直接覆盖安装。
-        versionCode = 32
-        versionName = "1.5.5.5"
+        // 2.0.0beta —— 双平台登录 + 胖乖生活洗衣 / 用水设备（beta）。
+        // versionCode 33 接在 1.5.5.5(32) 之后，保证从任何旧包都能直接覆盖安装。
+        versionCode = 33
+        versionName = "2.0.0beta"
 
         buildConfigField("String", "API_GATEWAY", "\"${secret("API_GATEWAY")}\"")
         buildConfigField("String", "APP_SIGN_SALT", "\"${secret("APP_SIGN_SALT")}\"")
+        // 胖乖登录接口。不配也能编译：默认用实测地址，本地与 CI 都不需要额外 secret。
+        buildConfigField(
+            "String",
+            "PANGGUAI_BASE",
+            "\"${secret("PANGGUAI_BASE").ifBlank { "https://userapi.qiekj.com" }}\""
+        )
 
         // 只发 64 位。目标环境是 arm64。
         ndk {
@@ -136,6 +141,10 @@ dependencies {
     // so 在 src/main/jniLibs/arm64-v8a/libwxqr.so，模型在 assets/wxqr/。
     // 原来的 ML Kit（com.google.mlkit:barcode-scanning）已移除：
     // 它带的 libbarhopper_v3.so 单个就 4.72 MB，微信引擎含模型才 2.1 MB。
+
+    // 支付宝 App 支付：服务端签好 prepayParam，客户端只负责唤起，不做二次签名。
+    // 参考 Mercury000/HUEL-yktwx 的接法；依赖走 settings.gradle.kts 里的阿里云 public 镜像。
+    implementation("com.alipay.sdk:alipaysdk-android:15.8.42")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")

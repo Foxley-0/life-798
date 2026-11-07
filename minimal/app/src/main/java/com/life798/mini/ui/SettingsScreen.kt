@@ -19,26 +19,29 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import top.yukonga.miuix.kmp.basic.BasicComponent
+import androidx.compose.ui.unit.sp
+import com.life798.mini.core.Platform
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 /**
- * 设置页：账号 + 通用入口 + 退出登录。
+ * 设置页：两个平台的账号 + 通用入口。
  *
- * 顶栏照 SonyPods 的 SettingsTabPage：`TopAppBar` 带 largeTitle + scrollBehavior，
- * 滚动时大标题收起、标题淡入。列表全部使用 miuix 的 preference 组件。
+ * 账号区是两张并列的卡片，各自独立显示状态、独立操作：
+ * - 已登录 → 退出登录
+ * - 未登录 / 已失效 → 登录（进入添加账号页，不回首登页）
  */
 @Composable
 fun SettingsScreen(
@@ -46,13 +49,13 @@ fun SettingsScreen(
     bottomInset: Dp,
     onOpenAppearance: () -> Unit,
     onOpenAbout: () -> Unit,
-    onLogout: () -> Unit
+    onAddAccount: (Platform) -> Unit,
+    onLogout: (Platform) -> Unit,
 ) {
-    var showLogoutConfirm by remember { mutableStateOf(false) }
+    var logoutTarget by remember { mutableStateOf<Platform?>(null) }
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // defaultWindowInsetsPadding 默认 true，状态栏 inset 由它自己补，外层不要再加
         TopAppBar(
             title = "设置",
             largeTitle = "设置",
@@ -64,7 +67,6 @@ fun SettingsScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                // 弹性回弹：到顶/到底不是硬停
                 .overScrollVertical()
                 .nestedScroll(scrollBehavior.nestedScrollConnection),
             contentPadding = PaddingValues(
@@ -77,11 +79,25 @@ fun SettingsScreen(
             item {
                 SmallTitle(text = "账号", modifier = Modifier.fillMaxWidth())
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    BasicComponent(
-                        title = "手机号",
-                        summary = state.phone.ifBlank { "未登录" }
+                    AccountCard(
+                        account = state.account(Platform.HUI798),
+                        onLogin = { onAddAccount(Platform.HUI798) },
+                        onLogout = { logoutTarget = Platform.HUI798 },
+                    )
+                    HorizontalDivider()
+                    AccountCard(
+                        account = state.account(Platform.PANGGUAI),
+                        onLogin = { onAddAccount(Platform.PANGGUAI) },
+                        onLogout = { logoutTarget = Platform.PANGGUAI },
                     )
                 }
+
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "两个账号独立登录、独立存储，互不影响。",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                )
 
                 Spacer(Modifier.height(16.dp))
 
@@ -98,24 +114,21 @@ fun SettingsScreen(
                         onClick = onOpenAbout
                     )
                 }
-
-                Spacer(Modifier.height(16.dp))
-
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    ArrowPreference(
-                        title = "退出登录",
-                        onClick = { showLogoutConfirm = true }
-                    )
-                }
             }
         }
 
-        if (showLogoutConfirm) {
+        // 退出确认：只退当前选中的平台，文案里带平台名，避免误以为两个都退
+        val target = logoutTarget
+        if (target != null) {
             OverlayDialog(
                 show = true,
-                title = "确定退出登录吗？",
-                summary = "退出后需要重新登录，设备编号会被清除。",
-                onDismissRequest = { showLogoutConfirm = false }
+                title = "确定退出${target.label}吗？",
+                summary = if (target == Platform.HUI798) {
+                    "退出后 798 的设备编号会被清除，需要重新登录；另一个平台的账号不受影响。"
+                } else {
+                    "只退出胖乖生活，798 的登录状态与数据不受影响。"
+                },
+                onDismissRequest = { logoutTarget = null }
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -123,16 +136,14 @@ fun SettingsScreen(
                 ) {
                     TextButton(
                         text = "取消",
-                        onClick = { showLogoutConfirm = false },
+                        onClick = { logoutTarget = null },
                         modifier = Modifier.weight(1f)
                     )
                     Button(
                         onClick = {
-                            showLogoutConfirm = false
-                            onLogout()
+                            logoutTarget = null
+                            onLogout(target)
                         },
-                        // 破坏性操作：红底。文字色用 onError 而不是写死白色 ——
-                        // Monet 取色下 error 可能变浅，白字会糊掉
                         colors = ButtonDefaults.buttonColors(
                             color = MiuixTheme.colorScheme.error,
                             contentColor = MiuixTheme.colorScheme.onError
@@ -145,5 +156,4 @@ fun SettingsScreen(
             }
         }
     }
-
 }

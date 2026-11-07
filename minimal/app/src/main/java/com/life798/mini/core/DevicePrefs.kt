@@ -45,13 +45,21 @@ data class DeviceEntry(
  * 以后重做扫描页也不会碰到账本。
  * [owner] 为空（未登录 / 刚登出）时整个仓库短路，不读也不写。
  */
-class DevicePrefs(context: Context, private val owner: String) {
+class DevicePrefs(
+    context: Context,
+    private val owner: String,
+    private val platform: Platform = Platform.HUI798,
+) {
 
     private val sp = context.applicationContext
         .getSharedPreferences("mini_device", Context.MODE_PRIVATE)
 
-    private val keyFavorites = "favorites_$owner"
-    private val keyVisits = "visits_$owner"
+    /**
+     * 平台前缀 + 手机号。798 是 `favorites_<phone>` / `visits_<phone>`（历史 key 不变），
+     * 胖乖是 `pangguai-favorites_<phone>` / `pangguai-visits_<phone>`。
+     */
+    private val keyFavorites = "${platform.prefix}favorites_$owner"
+    private val keyVisits = "${platform.prefix}visits_$owner"
 
     /** 没登录就没有设备记录 —— 防止登出后还看到上一个账号的常用设备。 */
     private val enabled: Boolean get() = owner.isNotBlank()

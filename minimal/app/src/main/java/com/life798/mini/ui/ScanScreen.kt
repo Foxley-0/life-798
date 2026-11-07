@@ -121,8 +121,10 @@ fun ScanScreen(
     /** 是否在扫描。浮层的显示条件就是它的反 —— 不再单独维护 showCover。 */
     val scanning by CameraController.scanning.collectAsState()
 
-    // 常用设备按手机号隔离：换账号就是另一个 key，跟上一个账号毫无关系
-    val devicePrefs = remember(state.phone) { DevicePrefs(context, state.phone) }
+    // 常用设备按「平台 + 手机号」隔离：换账号或换平台就是另一个 key。
+    // key 必须用 activeOwnerKey 而不是 phone —— 同一手机号的两个平台 phone 相同，
+    // 只用 phone 做 remember key 不会重建仓库，会读到上一个平台的列表。
+    val devicePrefs = remember(state.activeOwnerKey) { DevicePrefs(context, state.phone) }
     var deviceTick by remember { mutableStateOf(0) }
     // 扫描时清空：浮层已经淡出，没必要再算一遍列表
     val favorites = remember(devicePrefs, scanning, deviceTick) {
@@ -422,6 +424,17 @@ fun ScanScreen(
                     .padding(top = statusTop)
             ) {
                 PageTop()
+
+                // 只有胖乖在线、798 没登录时，扫码主流程没有可用的身份。
+                // 不把用户踢回登录页（另一个平台还在线），只在这里提示去哪里补登。
+                if (!state.hui798Active) {
+                    Text(
+                        text = "惠生活798 未登录，扫码后无法启动设备。请到设置页登录。",
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                    )
+                }
 
                 // 页头到卡片 52dp：这段留白是整页的呼吸区。
                 // 挤到 20 出头，视觉重心会重新回到上半屏 —— 就是之前被打回的那版

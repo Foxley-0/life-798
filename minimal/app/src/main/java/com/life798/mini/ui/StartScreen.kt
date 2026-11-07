@@ -1,5 +1,6 @@
 package com.life798.mini.ui
 
+import com.life798.mini.ui.water.WaterUi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -41,11 +42,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  */
 @Composable
 fun StartScreen(
-    state: UiState,
+    view: WaterUi,
     onBack: () -> Unit,
     onStart: () -> Unit
 ) {
-    val name = state.deviceName.ifBlank { "未知设备" }
+    val name = view.deviceName.ifBlank { "未知设备" }
 
     Column(
         modifier = Modifier
@@ -84,7 +85,7 @@ fun StartScreen(
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                text = state.deviceId.ifBlank { "—" },
+                text = view.deviceCode.ifBlank { "—" },
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
                 textAlign = TextAlign.Center,
@@ -92,14 +93,14 @@ fun StartScreen(
             )
 
             // 操作结果必须可见：之前点了「启动」界面毫无变化，用户只能连点
-            state.message?.let { msg ->
+            view.message?.let { msg ->
                 Spacer(Modifier.height(22.dp))
                 Text(
                     text = msg,
                     fontSize = 13.sp,
                     lineHeight = 19.sp,
                     textAlign = TextAlign.Center,
-                    color = if (state.messageIsError) {
+                    color = if (view.messageIsError) {
                         MiuixTheme.colorScheme.error
                     } else {
                         MiuixTheme.colorScheme.primary
@@ -115,13 +116,13 @@ fun StartScreen(
         ) {
             Button(
                 onClick = onStart,
-                enabled = !state.busy && state.deviceId.isNotBlank(),
+                enabled = !view.busy && view.deviceCode.isNotBlank(),
                 colors = ButtonDefaults.buttonColorsPrimary(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
             ) {
-                if (state.busy) {
+                if (view.busy) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp))
                 } else {
                     Text("启 动", fontSize = 17.sp)

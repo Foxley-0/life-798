@@ -1,5 +1,6 @@
 package com.life798.mini.ui
 
+import com.life798.mini.ui.water.WaterUi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,15 +46,14 @@ import java.time.LocalDate
  */
 @Composable
 fun UsingScreen(
-    state: UiState,
+    view: WaterUi,
     onBack: () -> Unit,
     onStop: () -> Unit
 ) {
-    val session = state.session
-    val closed = state.closed && session == null
-    val stopping = state.stopping
-    val name = (session?.deviceName ?: state.deviceName).orEmpty().ifBlank { "未知设备" }
-    val deviceId = session?.deviceId ?: state.deviceId
+    val closed = view.closed
+    val stopping = view.stopping
+    val name = view.deviceName.ifBlank { "未知设备" }
+    val deviceId = view.deviceCode
 
     Column(
         modifier = Modifier
@@ -112,10 +112,10 @@ fun UsingScreen(
                 )
             } else {
                 RunningBadge(stopping = stopping)
-                session?.let {
+                view.startedAt?.let {
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        text = startedLabel(it.startedAt),
+                        text = startedLabel(it),
                         fontSize = 13.sp,
                         color = MiuixTheme.colorScheme.onSurfaceSecondary
                     )
@@ -123,14 +123,14 @@ fun UsingScreen(
             }
 
             // 关闭失败之类的原因必须看得见，否则用户只会反复点按钮
-            state.message?.let { msg ->
+            view.message?.let { msg ->
                 Spacer(Modifier.height(20.dp))
                 Text(
                     text = msg,
                     fontSize = 13.sp,
                     lineHeight = 19.sp,
                     textAlign = TextAlign.Center,
-                    color = if (state.messageIsError) {
+                    color = if (view.messageIsError) {
                         MiuixTheme.colorScheme.error
                     } else {
                         MiuixTheme.colorScheme.primary
