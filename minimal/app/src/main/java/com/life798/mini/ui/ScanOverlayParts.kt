@@ -53,7 +53,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.life798.mini.R
-import com.life798.mini.core.DeviceEntry
+import com.life798.mini.ui.devicecard.DeviceCard
+import com.life798.mini.ui.devicecard.DeviceCardItem
+import com.life798.mini.ui.devicecard.DeviceIcons
+import androidx.compose.foundation.lazy.itemsIndexed
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -117,18 +120,6 @@ internal fun PageTop() {
 // 扫描卡
 // ---------------------------------------------------------------------------
 
-/**
- * 卡片里的一台设备。
- *
- * 只描述「它是谁、从什么时候开始」，不关心它来自哪个平台 ——
- * 出水、洗衣将来各有各的会话，但卡片只负责并列展示，所以这里不需要平台字段。
- * 真要区分时在这里加，卡片的版式不用动。
- */
-internal data class HeroDevice(
-    val id: String,
-    val name: String,
-    val startedAt: Long,
-)
 
 /** 同时最多展示两台。再多也放不下，而且业务上不会出现。 */
 private const val MAX_DEVICES = 2
@@ -169,11 +160,11 @@ private val HeroCardHeight = 178.dp
  */
 @Composable
 internal fun HeroCard(
-    devices: List<HeroDevice>,
+    devices: List<DeviceCardItem>,
     enabled: Boolean,
     onStartScan: () -> Unit,
     onOpenRecent: () -> Unit,
-    onOpenDevice: (String) -> Unit,
+    onOpenDevice: (DeviceCardItem) -> Unit,
 ) {
     val cs = MiuixTheme.colorScheme
     Card(
@@ -189,20 +180,19 @@ internal fun HeroCard(
         if (devices.isEmpty()) {
             EmptyHero(enabled = enabled, onStartScan = onStartScan, onOpenRecent = onOpenRecent)
         } else {
-            // 计时器提到这一层：两行共用一次重组，而不是每行各起一个。
-            // 卡片被置灰（管理模式）时 enabled=false，ticker 自动停，不空转。
-            val now = rememberNowTick(active = enabled)
             Column(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                devices.take(MAX_DEVICES).forEachIndexed { index, device ->
+                devices.take(MAX_DEVICES).forEachIndexed { index, item ->
                     if (index > 0) Spacer(Modifier.height(8.dp))
-                    HeroDeviceCard(
-                        device = device,
-                        now = now,
-                        onClick = { onOpenDevice(device.id) }
+                    // 和列表里是同一张卡，只是底色换成页面色，做出「大卡里挖了个槽」的凹陷感
+                    DeviceCard(
+                        item = item,
+                        containerColor = cs.background,
+                        cornerRadius = 14.dp,
+                        onClick = { onOpenDevice(item) }
                     )
                 }
                 if (devices.size < MAX_DEVICES) {
@@ -240,115 +230,6 @@ private fun EmptyHero(
     }
 }
 
-/**
- * 一张设备卡，嵌在 [HeroCard] 里面，整张可点。
- *
- * 高度 60dp（上下 11dp + 图标 38dp），两张加 8dp 间距共 128dp，
- * 一台时再加 12dp 间距和 46dp 按钮共 118dp —— 都塞得进 130dp 的内容区。
- *
- * 图标必须给够尺寸：26dp 的方块配 14dp 描边水滴，红色叠红色会糊成一团，
- * 看起来像被底色盖住了。这里 38dp 方块 + 20dp 水滴 + 主色，边界才立得住。
- *
- * 计时和箭头都**不参与 weight**，名字再长也挤不走它们；
- * 名字自己 `maxLines = 1` + 省略号，永远不会溢出卡片。
- */
-@Composable
-private fun HeroDeviceCard(
-    device: HeroDevice,
-    now: Long,
-    onClick: () -> Unit,
-) {
-    val cs = MiuixTheme.colorScheme
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(cs.background)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(cs.primary.copy(alpha = 0.14f)),
-            contentAlignment = Alignment.Center
-        ) {
-            DropGlyph(size = 20.dp, color = cs.primary, strokeUnits = 2.2f)
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = device.name,
-                color = cs.onSurface,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.height(2.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "正在使用",
-                    color = cs.onSurfaceVariantSummary,
-                    fontSize = 11.5.sp,
-                    maxLines = 1
-                )
-                Text(
-                    text = " · ",
-                    color = cs.onSurfaceVariantSummary,
-                    fontSize = 11.5.sp,
-                    maxLines = 1
-                )
-                Text(
-                    text = elapsedLabel(now - device.startedAt),
-                    color = cs.primary,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1
-                )
-            }
-        }
-        Spacer(Modifier.width(8.dp))
-        Icon(
-            imageVector = MiuixIcons.ChevronForward,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-            tint = cs.onSurfaceVariantSummary
-        )
-    }
-}
-
-/**
- * 每秒推进一次的「现在」。
- *
- * 只在卡片可见且可交互时跳 —— 置灰、切页、扫码浮层盖住时都不会空转。
- * 用 `produceState` 而不是 `LaunchedEffect` + `mutableStateOf`：
- * 后者要自己管作用域，前者离开组合就自动取消。
- */
-@Composable
-private fun rememberNowTick(active: Boolean): Long {
-    val now by produceState(initialValue = System.currentTimeMillis(), active) {
-        while (active) {
-            value = System.currentTimeMillis()
-            delay(1000L)
-        }
-    }
-    return now
-}
-
-/** 已用时长：HH:mm:ss。设备刚启动、时钟有偏差时按 0 处理，不显示负数。 */
-private fun elapsedLabel(elapsedMs: Long): String {
-    val total = (elapsedMs / 1000L).coerceAtLeast(0L)
-    return String.format(
-        Locale.US,
-        "%02d:%02d:%02d",
-        total / 3600,
-        total % 3600 / 60,
-        total % 60
-    )
-}
 
 /** 取景框：只保留上面两个角，下面两个角会跟按钮挤在一起。 */
 @Composable
@@ -430,7 +311,12 @@ private fun GhostButton(enabled: Boolean, onClick: () -> Unit) {
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        ClockGlyph(size = 20.dp, color = cs.onSurfaceVariantSummary)
+        Icon(
+            imageVector = DeviceIcons.Clock,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = cs.onSurfaceVariantSummary
+        )
     }
 }
 
@@ -449,15 +335,16 @@ private fun GhostButton(enabled: Boolean, onClick: () -> Unit) {
  */
 @Composable
 internal fun DeviceSection(
-    favorites: List<DeviceEntry>,
-    activeDeviceId: String?,
+    favorites: List<DeviceCardItem>,
+    /** 正在使用的设备键集合。跨平台，不能用裸编号。 */
+    activeKeys: Set<String>,
     managing: Boolean,
     selected: Set<String>,
-    onPick: (String) -> Unit,
+    onPick: (DeviceCardItem) -> Unit,
     onToggleSelect: (String) -> Unit,
     onSelectAll: () -> Unit,
     onToggleManage: () -> Unit,
-    onRename: (DeviceEntry) -> Unit,
+    onRename: (DeviceCardItem) -> Unit,
     onRemove: () -> Unit,
     onOpenRecent: () -> Unit,
     bottomInset: Dp,
@@ -568,16 +455,43 @@ internal fun DeviceSection(
                     .padding(start = 16.dp, end = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                favorites.forEach { entry ->
-                    FavoriteCard(
-                        entry = entry,
-                        active = entry.id == activeDeviceId,
-                        managing = managing,
-                        checked = entry.id in selected,
-                        onClick = {
-                            if (managing) onToggleSelect(entry.id) else onPick(entry.id)
+                favorites.forEach { item ->
+                    val active = item.key in activeKeys
+                    DeviceCard(
+                        item = if (active && !managing) item.copy(badge = "在用") else item,
+                        leading = if (managing) {
+                            {
+                                SelectCircle(checked = item.key in selected, color = cs.primary)
+                                Spacer(Modifier.width(11.dp))
+                            }
+                        } else {
+                            null
                         },
-                        onRename = { onRename(entry) }
+                        // 管理模式右侧换成铅笔；平时「在用」由 badge 表达，不需要额外控件
+                        trailing = if (managing) {
+                            {
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(RoundedCornerShape(11.dp))
+                                        .clickable { onRename(item) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = DeviceIcons.Pencil,
+                                        contentDescription = "重命名",
+                                        modifier = Modifier.size(18.dp),
+                                        tint = cs.onSurfaceVariantSummary
+                                    )
+                                }
+                            }
+                        } else {
+                            null
+                        },
+                        showChevron = !managing && !active,
+                        onClick = {
+                            if (managing) onToggleSelect(item.key) else onPick(item)
+                        }
                     )
                 }
                 // 底栏是悬浮胶囊，最后一张卡要躲开它
@@ -587,92 +501,6 @@ internal fun DeviceSection(
     }
 }
 
-/**
- * 一台常用设备。管理模式左侧多一个选择圈，右侧的「在用」换成铅笔。
- *
- * 底色用 `surfaceContainer` 而不是 `surface` —— 后者在浅色下是 #F7F7F7，
- * 跟页面背景 #F2F3F5 只差 5，卡片几乎看不出轮廓；深色下又是纯黑，压得过重。
- * surfaceContainer 是 #FFFFFF / #242424，两种模式下都立得住。
- */
-@Composable
-private fun FavoriteCard(
-    entry: DeviceEntry,
-    active: Boolean,
-    managing: Boolean,
-    checked: Boolean,
-    onClick: () -> Unit,
-    onRename: () -> Unit,
-) {
-    val cs = MiuixTheme.colorScheme
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(cs.surfaceContainer)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (managing) {
-            SelectCircle(checked = checked, color = cs.primary)
-            Spacer(Modifier.width(11.dp))
-        }
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(cs.primary.copy(alpha = if (active) 0.16f else 0.09f)),
-            contentAlignment = Alignment.Center
-        ) {
-            DropGlyph(size = 19.dp, color = cs.primary, strokeUnits = 2f)
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = entry.displayName,
-                color = cs.onSurface,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            entry.subName?.let { sub ->
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    text = sub,
-                    color = cs.onSurfaceVariantSummary,
-                    fontSize = 11.5.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-        if (managing) {
-            Spacer(Modifier.width(8.dp))
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(11.dp))
-                    .clickable(onClick = onRename),
-                contentAlignment = Alignment.Center
-            ) {
-                PencilGlyph(size = 18.dp, color = cs.onSurfaceVariantSummary)
-            }
-        } else if (active) {
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = "在用",
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(cs.primary.copy(alpha = 0.11f))
-                    .padding(horizontal = 8.dp, vertical = 3.5.dp),
-                color = cs.primary,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-    }
-}
 
 /** 选择圈：22dp 圆环，选中时填充主色并画对勾。 */
 @Composable
@@ -724,7 +552,12 @@ private fun EmptyDevices() {
                 .background(cs.onSurface.copy(alpha = 0.05f)),
             contentAlignment = Alignment.Center
         ) {
-            QrGlyph(size = 24.dp, color = cs.onSurface.copy(alpha = 0.28f))
+            Icon(
+                imageVector = DeviceIcons.Qr,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = cs.onSurface.copy(alpha = 0.28f)
+            )
         }
         Spacer(Modifier.height(12.dp))
         Text(
@@ -764,11 +597,11 @@ private fun EmptyDevices() {
  */
 @Composable
 internal fun RecentSheetContent(
-    recent: List<DeviceEntry>,
-    favoriteIds: Set<String>,
+    recent: List<DeviceCardItem>,
+    favoriteKeys: Set<String>,
     listHeight: Dp,
-    onPick: (String) -> Unit,
-    onAdd: (String) -> Unit,
+    onPick: (DeviceCardItem) -> Unit,
+    onAdd: (DeviceCardItem) -> Unit,
 ) {
     val cs = MiuixTheme.colorScheme
     // 抽屉贴底，最后一行不能被手势条压住
@@ -790,211 +623,46 @@ internal fun RecentSheetContent(
         return
     }
 
+    // 每行就是一张设备卡，和常用设备、正在使用完全同一种卡。
+    // 这里**不再用「一个大 Card 包住所有行」的 MIUI 分组列表**：那种写法会让
+    // 同一个设备在三个地方长得不一样，与「三处一视同仁」直接冲突。
     LazyColumn(
         modifier = Modifier
             .fillMaxWidth()
             .height(listHeight)
             .scrollEndHaptic()
-            .overScrollVertical()
+            .overScrollVertical(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(bottom = navBottom + 12.dp),
     ) {
-        item {
-            Card(
-                modifier = Modifier.padding(bottom = navBottom + 12.dp),
-                colors = CardDefaults.defaultColors(color = cs.secondaryContainer)
-            ) {
-                recent.forEachIndexed { index, entry ->
-                    if (index > 0) {
-                        HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+        itemsIndexed(recent) { _, item ->
+            val added = item.key in favoriteKeys
+            DeviceCard(
+                item = item,
+                showChevron = false,
+                trailing = if (added) {
+                    {
+                        Text(
+                            text = "已添加",
+                            modifier = Modifier.padding(horizontal = 6.dp),
+                            color = cs.onSurfaceVariantSummary,
+                            fontSize = 12.sp
+                        )
                     }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onPick(entry.id) }
-                            .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = entry.displayName,
-                                color = cs.onSurface,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(Modifier.height(2.5.dp))
-                            Text(
-                                text = visitTime(entry.at),
-                                color = cs.onSurfaceVariantSummary,
-                                fontSize = 11.sp,
-                                maxLines = 1
+                } else {
+                    {
+                        IconButton(onClick = { onAdd(item) }) {
+                            Icon(
+                                imageVector = MiuixIcons.Add,
+                                contentDescription = "添加到常用设备",
+                                tint = cs.primary
                             )
                         }
-                        Spacer(Modifier.width(8.dp))
-                        if (entry.id in favoriteIds) {
-                            Text(
-                                text = "已添加",
-                                modifier = Modifier.padding(end = 10.dp),
-                                color = cs.onSurfaceVariantSummary,
-                                fontSize = 12.sp
-                            )
-                        } else {
-                            IconButton(onClick = { onAdd(entry.id) }) {
-                                Icon(
-                                    imageVector = MiuixIcons.Add,
-                                    contentDescription = "添加到常用设备",
-                                    tint = cs.primary
-                                )
-                            }
-                        }
                     }
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 自绘图标
-//
-// miuix 图标库里只有 Add / Back / ChevronForward / ListView / Months /
-// Scan / Settings 这几个，相机、水滴、时钟、铅笔、二维码一个都没有；
-// Material Icons 又全是实心 —— 套进来会变成一块黑疙瘩。
-// 设计稿是描边风格，所以统一按 24×24 坐标系自己画。
-// ---------------------------------------------------------------------------
-
-/** 水滴。尖头朝上、圆肚朝下。 */
-@Composable
-private fun DropGlyph(size: Dp, color: Color, strokeUnits: Float = 2f) {
-    Canvas(modifier = Modifier.size(size)) {
-        val s = this.size.minDimension / 24f
-        val style = Stroke(
-            width = strokeUnits * s,
-            cap = StrokeCap.Round,
-            join = StrokeJoin.Round
-        )
-        val cx = 12f * s
-        val cy = 14f * s
-        val r = 6.2f * s
-        val tip = 2.8f * s
-        val drop = Path().apply {
-            moveTo(cx, tip)
-            cubicTo(cx - r * 0.40f, cy - r * 1.05f, cx - r, cy - r * 0.42f, cx - r, cy)
-            arcTo(
-                rect = Rect(cx - r, cy - r, cx + r, cy + r),
-                startAngleDegrees = 180f,
-                // 必须是 -180（逆时针），不能是 +180。
-                // Compose 的 0° 在 3 点方向、正角度顺时针：从 180°（左）扫 +180
-                // 走的是 180 → 270 → 360，也就是**上半圆**，圆肚会鼓到上面去，
-                // 和从顶点下来的两条边交叉，画出来是个「∧」加一个三角洞，
-                // 根本不是水滴。扫 -180 才是 180 → 90 → 0 的下半圆，圆肚朝下。
-                sweepAngleDegrees = -180f,
-                forceMoveTo = false
-            )
-            cubicTo(cx + r, cy - r * 0.42f, cx + r * 0.40f, cy - r * 1.05f, cx, tip)
-            close()
-        }
-        drawPath(drop, color, style = style)
-    }
-}
-
-/** 时钟。外圈 + 时针分针。 */
-@Composable
-private fun ClockGlyph(size: Dp, color: Color) {
-    Canvas(modifier = Modifier.size(size)) {
-        val s = this.size.minDimension / 24f
-        val style = Stroke(
-            width = 2f * s,
-            cap = StrokeCap.Round,
-            join = StrokeJoin.Round
-        )
-        drawCircle(
-            color = color,
-            radius = 8.6f * s,
-            center = Offset(12f * s, 12f * s),
-            style = style
-        )
-        val hands = Path().apply {
-            moveTo(12f * s, 7.4f * s)
-            lineTo(12f * s, 12f * s)
-            lineTo(15.1f * s, 14f * s)
-        }
-        drawPath(hands, color, style = style)
-    }
-}
-
-/** 铅笔。斜放的笔身 + 笔头分隔线。 */
-@Composable
-private fun PencilGlyph(size: Dp, color: Color) {
-    Canvas(modifier = Modifier.size(size)) {
-        val s = this.size.minDimension / 24f
-        val style = Stroke(
-            width = 1.9f * s,
-            cap = StrokeCap.Round,
-            join = StrokeJoin.Round
-        )
-        val body = Path().apply {
-            moveTo(16.2f * s, 3.4f * s)
-            lineTo(20.6f * s, 7.8f * s)
-            lineTo(8.4f * s, 20f * s)
-            lineTo(3.2f * s, 20.8f * s)
-            lineTo(4f * s, 15.6f * s)
-            close()
-        }
-        drawPath(body, color, style = style)
-        drawLine(
-            color = color,
-            start = Offset(13.6f * s, 6f * s),
-            end = Offset(18f * s, 10.4f * s),
-            strokeWidth = 1.9f * s,
-            cap = StrokeCap.Round
-        )
-    }
-}
-
-/** 二维码：三个定位角 + 右下角一小块数据。 */
-@Composable
-private fun QrGlyph(size: Dp, color: Color) {
-    Canvas(modifier = Modifier.size(size)) {
-        val s = this.size.minDimension / 24f
-        val style = Stroke(
-            width = 2f * s,
-            cap = StrokeCap.Round,
-            join = StrokeJoin.Round
-        )
-        listOf(
-            Offset(3f * s, 3f * s),
-            Offset(14f * s, 3f * s),
-            Offset(3f * s, 14f * s)
-        ).forEach { offset ->
-            drawRoundRect(
-                color = color,
-                topLeft = offset,
-                size = GeomSize(7f * s, 7f * s),
-                cornerRadius = CornerRadius(1.6f * s),
-                style = style
+                },
+                onClick = { onPick(item) }
             )
         }
-        drawRect(
-            color = color,
-            topLeft = Offset(14f * s, 14f * s),
-            size = GeomSize(3f * s, 3f * s),
-            style = style
-        )
-        drawLine(
-            color = color,
-            start = Offset(20f * s, 14f * s),
-            end = Offset(20f * s, 17f * s),
-            strokeWidth = 2f * s,
-            cap = StrokeCap.Round
-        )
-        drawLine(
-            color = color,
-            start = Offset(17f * s, 20f * s),
-            end = Offset(21f * s, 20f * s),
-            strokeWidth = 2f * s,
-            cap = StrokeCap.Round
-        )
     }
 }
 

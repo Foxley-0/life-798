@@ -140,12 +140,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk "out/798-mini-${GITHUB_REF_NAME}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "out/yishuitong-${GITHUB_REF_NAME}.apk"
           if [ ! -f app/build/outputs/apk/release/app-release.apk ]; then
             echo "::error::release APK 没生成，检查上一步 assembleRelease 的日志"
             exit 1
           fi
-          cp app/build/outputs/apk/release/app-release.apk "out/798-mini-${GITHUB_REF_NAME}-release.apk"
+          cp app/build/outputs/apk/release/app-release.apk "out/yishuitong-${GITHUB_REF_NAME}-release.apk"
           ls -la out/
 
       # 发布正文来自仓库根的 RELEASE_NOTES.md —— 每次发版前改它，
@@ -162,13 +162,13 @@ jobs:
             exit 0
           fi
           echo "::warning::RELEASE_NOTES.md 缺失或为空，使用最小正文"
-          printf '%s\n' "**798 小助手 ${GITHUB_REF_NAME}**" "" "详见仓库提交记录。" > "$NOTES"
+          printf '%s\n' "**一水通 ${GITHUB_REF_NAME}**" "" "详见仓库提交记录。" > "$NOTES"
 
       - name: Publish Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: 798 小助手 ${{ github.ref_name }}
+          name: 一水通 ${{ github.ref_name }}
           fail_on_unmatched_files: false
           body_path: RELEASE_NOTES.md
           files: |

@@ -9,7 +9,7 @@ package com.life798.mini.core
 data class UpdateInfo(
     /** 去掉前缀 v 的版本号，例如 "1.3.10"。 */
     val version: String,
-    /** release 标题，例如「798 小助手 v1.3.10」。 */
+    /** release 标题，例如「一水通 v1.3.10」。 */
     val title: String,
     /** release 页面，浏览器打开用。 */
     val pageUrl: String,

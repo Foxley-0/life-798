@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
+import com.life798.mini.core.DevicePrefs
 import com.life798.mini.core.Platform
 import com.life798.mini.core.PlatformSessionStore
 import com.life798.mini.core.water.PangguaiWaterStore
@@ -137,6 +138,10 @@ class PangguaiWaterViewModel(app: Application) : AndroidViewModel(app) {
                 supportAppUserFinish = detail.supportAppUserFinish,
             )
             store.saveDevice(device)
+            // 扫码即记一笔，写进胖乖自己的 `pangguai-visits_<手机号>`。
+            // 记录用 SN 而不是 deviceId：卡片点回来时要重放 onScan，那里认的是 SN。
+            val owner = sessions.loadAll()[Platform.PANGGUAI]?.phone.orEmpty()
+            DevicePrefs(getApplication(), owner, Platform.PANGGUAI).recordVisit(sn, detail.name)
             AppLog.i(
                 "PangguaiWater",
                 "预检完成 goodsId=${device.goodsId} name=${device.name} " +

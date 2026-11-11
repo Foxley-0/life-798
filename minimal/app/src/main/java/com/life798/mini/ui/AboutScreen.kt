@@ -40,6 +40,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -191,14 +193,18 @@ fun AboutPage(
                 //
                 // 之前那版用 drawWithContent + BlendMode.SrcIn 盖实色渐变，两个问题：
                 // 1) 材质不同（不采样、不模糊），跟图标凑不到一起；
-                // 2) linearGradient 默认左上→右下对角，40sp 粗体 7 个字横跨 240dp，
+                // 2) linearGradient 默认左上→右下对角，40sp 粗体横跨 240dp，
                 //    每个字落在渐变的不同位置，看起来像彩色标签。
+                //
+                // 字体换成霞鹜漫黑（马克笔手写体）的三字子集，见 res/font/yst_marker.ttf。
+                // 艺术字自带笔重，不要叠 fontWeight.Bold —— 会被二次加粗、笔画糊死。
+                // 三个字比原来七个字短，字号从 40sp 提到 48sp 撑住版面。
                 //
                 // color 必须保留：textureBlur 在 shader 不可用时会自动降级，靠它出字。
                 Text(
-                    text = "798 小助手",
-                    fontSize = 40.sp,
-                    fontWeight = FontWeight.Bold,
+                    text = "一水通",
+                    fontSize = 48.sp,
+                    fontFamily = YstTitleFont,
                     color = MiuixTheme.colorScheme.onSurface,
                     modifier = Modifier
                         .graphicsLayer {
@@ -443,5 +449,15 @@ private fun SectionTitle(title: String) {
 
 private const val LOGO_SPACER_KEY = "logoSpacer"
 private const val DEVELOPER_URL = "https://github.com/Foxley-0/life-798"
+
+/**
+ * 标题艺术字：霞鹜漫黑（LXGW Marker Gothic）只保留「一水通」三个字的子集，1.8 KB。
+ *
+ * 按 SIL OFL 的保留名称条款，做过裁剪的衍生字体不能再叫原名，所以内部的
+ * family / PostScript 名改成了 YST Marker，版权与授权声明仍保留在字体里。
+ *
+ * 放在文件顶层而不是 composable 内部：FontFamily 每次重组新建会触发字形重新加载。
+ */
+private val YstTitleFont: FontFamily = FontFamily(Font(R.font.yst_marker))
 
 private val HERO_EXTRA_TOP = 40.dp

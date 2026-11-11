@@ -1,6 +1,7 @@
 package com.life798.mini.net
 
 import com.life798.mini.BuildConfig
+import com.life798.mini.core.AccountInfo
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.BillRecord
@@ -116,14 +117,28 @@ class WaterApi(
         }
     }
 
-    /** 取账户信息，用于补全 uid。 */
-    suspend fun viewInfo(token: String): ApiResult<String> = io {
+    /**
+     * 取账户信息，补全 uid 和手机号。
+     *
+     * 响应里两个字段容易看错：
+     * ```
+     * "id":"13a0702bb1409000"   ← 账号 id，跟手机号毫无关系
+     * "pn":"17772892831"        ← 绑定手机号（phone number），这才是账本 owner
+     * ```
+     * `name` 是昵称（默认就是手机号），只在 `pn` 缺失时拿来兜底。
+     */
+    suspend fun viewInfo(token: String): ApiResult<AccountInfo> = io {
         val req = builder("$base/acc/view-info")
             .header("Authorization", token)
             .get()
             .build()
         call(req) { json ->
-            json.optJSONObject("data")?.optString("id").orEmpty()
+            val data = json.optJSONObject("data")
+                ?: return@call AccountInfo()
+            AccountInfo(
+                uid = data.optString("id"),
+                phone = data.optString("pn").ifBlank { data.optString("name") },
+            )
         }
     }
 
@@ -186,16 +201,26 @@ class WaterApi(
     /**
      * 账单列表，`status=3` 即「已付款」。
      *
+     * 一次要 [BILL_PAGE_SIZE] 条。实测（2026-11-11，官方 token 直连）服务端
+     * 不设上限也不截断，`size=1000` 能把 28 条全部返回，所以正常账号一次请求
+     * 就拉完，**没有翻页这回事**。
+     *
+     * 唯一的兜底：万一返回条数正好等于请求条数，说明可能真的超过 1000 条，
+     * 调用方再补一次 `page=1`（见 [BillSync]）。不做循环。
+     *
      * 列表**不含用量**，只有时间、金额、设备名（在 msg 里）。用量得靠
      * [billDetail] 逐条补，所以这里返回的记录 `liters` 一律为 null。
+     *
+     * 0 元账单（`payment<=0`）在解析处直接丢弃 —— 那是「扫码了但没出水」的空会话，
+     * 抓包实证其 `gene.out` 全程不变，记进账本只会污染统计。
      */
-    suspend fun billList(token: String, page: Int = 0, size: Int = 20): ApiResult<List<BillRecord>> = io {
-        val url = "$base/bill/lst-owner?page=$page&size=$size&hasCount=true&status=3"
+    suspend fun billList(token: String, page: Int = 0): ApiResult<List<BillRecord>> = io {
+        val url = "$base/bill/lst-owner?page=$page&size=$BILL_PAGE_SIZE&hasCount=true&status=3"
         val req = builder(url).header("Authorization", token).get().build()
         call(req) { json ->
             // 没有数据时服务端返回 {"code":0,"size":"0"}，根本没有 data 字段
-            val array = json.optJSONArray("data") ?: return@call emptyList<BillRecord>()
-            buildList {
+            val array = json.optJSONArray("data") ?: return@call emptyList()
+            val items = buildList {
                 for (i in 0 until array.length()) {
                     val item = array.optJSONObject(i) ?: continue
                     val id = item.optString("id")
@@ -219,6 +244,7 @@ class WaterApi(
                     )
                 }
             }
+            items
         }
     }
 
@@ -331,8 +357,18 @@ class WaterApi(
 
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
 
-    private companion object {
+    companion object {
         /** 从 `水表/淋浴器设备(XXX)消费` 里抠出设备名。 */
-        val DEVICE_NAME = Regex("""设备\((.+?)\)""")
+        private val DEVICE_NAME = Regex("""设备\((.+?)\)""")
+
+        /**
+         * 单次请求条数。
+         *
+         * 实测（2026-11-11，官方 App token 直连 i.ilife798.com）：
+         * `size=100 / 200 / 500 / 1000` 全部原样返回，服务端**不设上限、也不截断**，
+         * 只有 `size=0` / `size=abc` 这类非法值才返回 `code:-100`。
+         * 所以直接开大：正常账号一次请求就拿到全部历史，不需要翻页。
+         */
+        const val BILL_PAGE_SIZE = 1000
     }
 }

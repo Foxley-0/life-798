@@ -1,5 +1,6 @@
 package com.life798.mini.core.auth
 
+import com.life798.mini.core.AccountInfo
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.Platform
 import com.life798.mini.core.PlatformAuth
@@ -39,5 +40,5 @@ class Hui798Auth(
             is ApiResult.Err -> r
         }
 
-    override suspend fun verify(token: String): ApiResult<String> = api.viewInfo(token)
+    override suspend fun verify(token: String): ApiResult<AccountInfo> = api.viewInfo(token)
 }

@@ -29,7 +29,15 @@ data class BillRecord(
     /** 本次用量（升），来自详情 `dev.subs[0].out`。null 表示还没拉到详情。 */
     val liters: Double?,
     /** 本次出水时长（秒），来自详情 `dev.gene.secs`。 */
-    val secs: Double?
+    val secs: Double?,
+    /**
+     * 服务端已经查不到这笔账单的用量（详情返回 `liters = null`，例如服务端清了历史）。
+     *
+     * 打上这个标记就不再重复补详情 —— 否则这类账单会永远排在
+     * [BillStore.missingDetail] 队头，每轮同步都白跑一遍，把真正能补的挤掉。
+     * 界面上的表现和不标记时一样：升数显示「—」。
+     */
+    val dead: Boolean = false
 )
 
 /** 一段时间的合计。升数和金额分开累加，因为升数可能还没补全。 */
@@ -69,6 +77,15 @@ class BillStore(
      */
     private val key = "${platform.prefix}$KEY_PREFIX$owner"
 
+    /**
+     * 上次同步成功的日期（ISO 日期字符串）。
+     *
+     * 跟账本同一个 xml、同一套平台前缀，但**不带** `bills_` 前缀 ——
+     * 遗留 key 清理逻辑按 `bills_<手机号>` 的形状匹配，这条不能长得像账本，
+     * 否则会被当成老数据合并或删掉。
+     */
+    private val syncDayKey get() = "${platform.prefix}lastSync_$owner"
+
     /** 没登录就没有账本 —— 防止登出后还读到上一个账号的数据。 */
     private val enabled: Boolean get() = owner.isNotBlank()
 
@@ -98,7 +115,8 @@ class BillStore(
                 current[bill.id] = bill.copy(
                     liters = old.liters ?: bill.liters,
                     secs = old.secs ?: bill.secs,
-                    deviceName = bill.deviceName ?: old.deviceName
+                    deviceName = bill.deviceName ?: old.deviceName,
+                    dead = old.dead
                 )
             }
         }
@@ -106,15 +124,48 @@ class BillStore(
         return added
     }
 
-    /** 还没拿到升数的账单 id，用于逐条补详情。 */
+    // ---------------- 每日同步节流 ----------------
+
+    /**
+     * 今天是否已经同步过。
+     *
+     * 用量页每进一次就拉一遍账单太吵，服务端也没这个必要。这里按「平台 + 账号」
+     * 记一个日期戳，同一天只放行一次；跨过零点自然失效，第二天第一次进来再拉。
+     *
+     * 未登录时恒为 true —— 没有账号就没有可同步的东西，别让调用方白起协程。
+     */
+    fun syncedToday(): Boolean {
+        if (!enabled) return true
+        return sp.getString(syncDayKey, null) == LocalDate.now().toString()
+    }
+
+    /**
+     * 记下「今天已经同步过了」。
+     *
+     * 只在同步**真正成功**后调用。失败就不写，下次进页面还能再试一次；
+     * 否则一次网络抖动会让这一整天都不再刷新。
+     */
+    fun markSyncedToday() {
+        if (!enabled) return
+        sp.edit().putString(syncDayKey, LocalDate.now().toString()).apply()
+    }
+
+    /**
+     * 还没拿到升数的账单 id，用于逐条补详情。
+     *
+     * 排除 [BillRecord.dead]：那类账单服务端已经查不到用量，再试也是白跑，
+     * 留在队头只会把真正能补的挤到预算外面。
+     */
     @Synchronized
     fun missingDetail(): List<String> =
-        read().filter { it.liters == null }.sortedByDescending { it.at }.map { it.id }
+        read()
+            .filter { it.liters == null && !it.dead }
+            .sortedByDescending { it.at }
+            .map { it.id }
 
     /** 详情拉回来之后补字段。 */
     @Synchronized
-    fun updateDetail(id: String, liters: Double?, secs: Double?, deviceName: String?) {
-        if (liters == null) return
+    fun updateDetail(id: String, liters: Double?, secs: Double?, deviceName: String?) {        if (liters == null) return
         val list = read().toMutableList()
         val index = list.indexOfFirst { it.id == id }
         if (index < 0) return
@@ -124,6 +175,41 @@ class BillStore(
             deviceName = deviceName ?: list[index].deviceName
         )
         write(list)
+    }
+
+    /**
+     * 批量写入详情结果 —— **一次读、一次落盘**。
+     *
+     * 补详情是逐条发请求，一条一个 [updateDetail] 就是一次全表反序列化 + 全量
+     * `commit()`；186 条账单要写 186 次，比网络本身还慢。这里把一批结果攒起来
+     * 一次写完，同一批 20 条只付一次写盘成本。
+     *
+     * 只认 `id` 已存在的记录：同步过程中账号切换、账单被服务端删掉都不该凭空
+     * 造出一条本地没有的账单。`liters = null` 且 `dead = true` 表示服务端查不到
+     * 用量，打个标记让它退出补详情队列。
+     *
+     * @return 实际更新了几条
+     */
+    @Synchronized
+    fun fillDetails(records: List<BillRecord>): Int {
+        if (!enabled || records.isEmpty()) return 0
+        val byId = read().associateBy { it.id }.toMutableMap()
+        var updated = 0
+        records.forEach { record ->
+            val old = byId[record.id] ?: return@forEach
+            if (record.liters == null && !record.dead) return@forEach
+            byId[record.id] = old.copy(
+                liters = record.liters ?: old.liters,
+                secs = record.secs ?: old.secs,
+                deviceName = record.deviceName ?: old.deviceName,
+                dead = record.dead || old.dead
+            )
+            updated++
+        }
+        // 一条都没命中就不要白写一次盘
+        if (updated == 0) return 0
+        write(byId.values.toList())
+        return updated
     }
 
     // ---------------- 聚合查询 ----------------
@@ -186,10 +272,12 @@ class BillStore(
 
     // ---------------- 内部 ----------------
 
-    private fun read(): List<BillRecord> {
-        if (!enabled) return emptyList()
-        val raw = sp.getString(key, null) ?: return emptyList()
-        // 数据损坏就当空账本，宁可少显示也不要让页面崩
+    private fun read(): List<BillRecord> =
+        if (!enabled) emptyList() else parse(sp.getString(key, null))
+
+    /** 把一段落盘 JSON 解成账单列表。数据损坏就当空账本，宁可少显示也不要让页面崩。 */
+    private fun parse(raw: String?): List<BillRecord> {
+        if (raw.isNullOrBlank()) return emptyList()
         return runCatching {
             val array = JSONArray(raw)
             buildList {
@@ -205,7 +293,8 @@ class BillStore(
                             yuan = item.optDouble("y", 0.0),
                             deviceName = item.optString("n").takeIf { it.isNotBlank() },
                             liters = if (item.has("l")) item.optDouble("l") else null,
-                            secs = if (item.has("s")) item.optDouble("s") else null
+                            secs = if (item.has("s")) item.optDouble("s") else null,
+                            dead = item.optBoolean("d", false)
                         )
                     )
                 }
@@ -213,10 +302,49 @@ class BillStore(
         }.getOrDefault(emptyList())
     }
 
+    /**
+     * 把「老板本按 uid 存的账本」合并进当前手机号的账本。
+     *
+     * 历史原因：2.0.0 早期版本的 `verify()` 把 `/acc/view-info` 的 `id`
+     * （16 位十六进制账号 id）当成手机号回填，账本 owner 从 `bills_<手机号>`
+     * 漂移成了 `bills_<uid>`。数据没丢，但换了个 key，界面上看起来就是「账本空了」。
+     *
+     * 这里在每次同步前跑一遍（幂等、无遗留时直接 return）：
+     * 把 `bills_` 前缀下**后缀不是 11 位手机号**的 key 全部并进当前账本，然后删掉。
+     * 后缀是 11 位手机号的一律不动 —— 那是别的账号的账本，不能并。
+     *
+     * @return 合并进来多少条本地没有的记录
+     */
+    @Synchronized
+    fun migrateLegacyOwners(): Int {
+        if (!enabled) return 0
+        val stale = sp.all.keys.filter { k ->
+            k.startsWith(KEY_PREFIX) &&
+                k != key &&
+                !k.removePrefix(KEY_PREFIX).matches(PHONE)
+        }
+        if (stale.isEmpty()) return 0
+
+        var merged = 0
+        stale.forEach { k ->
+            // merge 会写盘并保住已有升数；空数据也照样把 key 清掉
+            merged += merge(parse(sp.getString(k, null)))
+        }
+        sp.edit().also { editor -> stale.forEach { editor.remove(it) } }.apply()
+        AppLog.i("Bill", "迁移遗留账本 ${stale.size} 个 key（$stale），合并进来 $merged 条")
+        return merged
+    }
+
     private fun write(bills: Collection<BillRecord>) {
         if (!enabled) return
-        // 超出上限丢最旧的，防止 JSON 无限膨胀
-        val trimmed = bills.sortedByDescending { it.at }.take(MAX_BILLS)
+        // 超出上限丢最旧的，防止 JSON 无限膨胀。
+        // 账单是用户唯一的历史，被丢掉就再也拉不回来（服务端会过期），
+        // 所以截断必须留个记录，出问题时能查到是什么时候开始丢的。
+        val sorted = bills.sortedByDescending { it.at }
+        if (sorted.size > MAX_BILLS) {
+            AppLog.w("Bill", "账本超过 $MAX_BILLS 条，丢弃最旧的 ${sorted.size - MAX_BILLS} 条")
+        }
+        val trimmed = sorted.take(MAX_BILLS)
         val array = JSONArray()
         trimmed.forEach { bill ->
             val obj = JSONObject()
@@ -226,6 +354,7 @@ class BillStore(
             bill.deviceName?.let { obj.put("n", it) }
             bill.liters?.let { obj.put("l", round3(it)) }
             bill.secs?.let { obj.put("s", it) }
+            if (bill.dead) obj.put("d", true)
             array.put(obj)
         }
         // 账单是用户唯一的历史记录，用 commit 同步落盘，进程被杀也不丢
@@ -242,11 +371,18 @@ class BillStore(
         private const val KEY_PREFIX = "bills_"
         private const val MAX_BILLS = 3000
 
+        /** 账本归属只可能是手机号，11 位数字。 */
+        private val PHONE = Regex("""\d{11}""")
+
         /**
          * 删掉「按账号隔离」之前的单份账本。
          *
          * 那时候所有账号共用 `bills` 这一个 key，里面的数据已经分不清是谁的了，
          * 留着只会误导 —— 启动时清一次，之后永远走 `bills_<owner>`。
+         *
+         * **只删 `bills` 这一个 key**，其他一律交给 [migrateLegacyOwners] 处理：
+         * 早期版本把 `data.id`（16 位十六进制）当手机号用过，那些 key 里是**真数据**，
+         * 直接删就永久丢了，必须先合并再删。
          */
         fun clearLegacy(context: Context) {
             context.applicationContext

@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import com.life798.mini.core.BillRecord
 import com.life798.mini.core.BillStore
 import com.life798.mini.core.BillTotals
+import com.life798.mini.core.Platform
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
@@ -66,30 +67,67 @@ private data class BillSnapshot(
 /**
  * 用水账本页。
  *
- * 数据全部来自服务端账单（[BillStore] 只是它的本地镜像），本地不自己算用量：
- * - 时间、金额、设备名来自 `/bill/lst-owner`
- * - 升数、时长来自 `/bill/view-full`
+ * **两个平台共用这一套版式**，只有数据源不同：
+ * - 惠生活798：`/bill/lst-owner` + `/bill/view-full`
+ * - 胖乖生活：`/order/list` + `/order/detail`（`waterUseValue` 是毫升）
+ *
+ * 账本按 `Platform.prefix + 手机号` 隔离，同一个手机号登两个平台也是两本账，
+ * 切换 Tab 只是换一个 [BillStore] 实例，页面结构一行都不用改。
  *
  * 整页只有一个月的数据：顶部一个年月按钮，点了弹双滚轮，
  * 选完之后汇总卡、折线图、明细全部跟着切到那个月。
  */
 @Composable
-fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
+fun UsageScreen(
+    state: UiState,
+    bottomInset: Dp,
+    onSyncHui798: () -> Unit,
+    onSyncPangguai: () -> Unit,
+) {
     val context = LocalContext.current
-    // 账本按「平台 + 手机号」隔离。key 用 activeOwnerKey 而不是 phone：
+
+    // 当前平台。存 id 而不是枚举：rememberSaveable 只认基本类型，
+    // 进程重建后能原样恢复。
+    var platformId by rememberSaveable { mutableStateOf(Platform.HUI798.id) }
+    val platform = Platform.fromId(platformId)
+    val session = state.account(platform)
+
+    // 两个平台的同步状态各一套，切过去看到的就是各自的进度，不会互相串
+    val syncing: Boolean
+    val revision: Int
+    val syncError: String?
+    val syncNow: () -> Unit
+    if (platform == Platform.HUI798) {
+        syncing = state.billsSyncing
+        revision = state.billsRevision
+        syncError = state.billsError
+        syncNow = onSyncHui798
+    } else {
+        syncing = state.pgBillsSyncing
+        revision = state.pgBillsRevision
+        syncError = state.pgBillsError
+        syncNow = onSyncPangguai
+    }
+
+    // 账本按「平台 + 手机号」隔离。key 用 ownerKey 而不是 phone：
     // 同一手机号两个平台的 phone 相同，只用 phone 不会重建仓库，会读错账本。
-    val store = remember(state.activeOwnerKey) { BillStore(context, state.phone) }
+    val store = remember(session.ownerKey) { BillStore(context, session.phone, platform) }
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
 
     // 有账单的年份 / 月份，滚轮里只出现这些，空月份转不到
-    val years = remember(store, state.billsRevision) { store.years() }
+    val years = remember(store, revision) { store.years() }
 
     var year by rememberSaveable { mutableIntStateOf(LocalDate.now().year) }
     var month by rememberSaveable { mutableIntStateOf(LocalDate.now().monthValue) }
     var showPicker by remember { mutableStateOf(false) }
 
-    // 进页面同步一次
-    LaunchedEffect(Unit) { onSync() }
+    // 一天只同步一次：账单是按天产生的，反复切进切出用量页没必要每次都打服务端。
+    // 跨过零点 syncedToday() 自然变 false，第二天第一次进来会再拉一遍。
+    // 「今天已同步」的落戳放在同步成功的分支里（见 AppViewModel.syncBills），
+    // 失败不落戳，下次进来还能重试。
+    LaunchedEffect(platform, session.isActive) {
+        if (session.isActive && !store.syncedToday()) syncNow()
+    }
 
     // 当前选中的年月可能没有账单（比如刚跨月、或者同步前是空的），
     // 自动落到最近一个有记录的月份，避免进来就看到空白
@@ -104,7 +142,7 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
         }
     }
 
-    val snapshot = remember(store, year, month, state.billsRevision) {
+    val snapshot = remember(store, year, month, revision) {
         BillSnapshot(
             bills = store.monthBills(year, month),
             monthTotals = store.monthTotals(year, month),
@@ -127,9 +165,17 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
             scrollBehavior = scrollBehavior
         )
 
+        // 平台切换：与登录页同一个控件（PlatformSwitcher），不另做一套
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+            PlatformSwitcher(
+                selected = platform,
+                onSelect = { platformId = it.id }
+            )
+        }
+
         PullToRefresh(
-            isRefreshing = state.billsSyncing,
-            onRefresh = onSync,
+            isRefreshing = syncing,
+            onRefresh = syncNow,
             modifier = Modifier.weight(1f)
         ) {
             LazyColumn(
@@ -154,20 +200,20 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
                     )
                 }
 
-                // 798 没登录：账本属于 798，这里不展示任何数据，只说明去哪里登录。
+                // 当前平台没登录：账本属于这个账号，这里不展示任何数据，只说明去哪里登录。
                 // 不回登录页 —— 另一个平台可能还在线，门禁由 UiState.loggedIn 统一判断。
-                if (!state.hui798Active) {
+                if (!session.isActive) {
                     item(key = "no-account") {
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp)) {
                                 Text(
-                                    text = "惠生活798 未登录",
+                                    text = "${platform.label} 未登录",
                                     fontSize = 15.sp,
                                     color = MiuixTheme.colorScheme.onSurface,
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    text = "账本与扫码都只属于 798 账号，请到设置页登录后查看。",
+                                    text = "账本属于 ${platform.label} 账号，请到设置页登录后查看。",
                                     fontSize = 13.sp,
                                     color = MiuixTheme.colorScheme.onSurfaceSecondary,
                                 )
@@ -177,7 +223,7 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
                 }
 
                 // 同步失败：本地数据照常显示，只在这里提一句
-                state.billsError?.let { error ->
+                syncError?.let { error ->
                     item(key = "error") { SyncErrorCard(error) }
                 }
 
@@ -203,7 +249,7 @@ fun UsageScreen(state: UiState, bottomInset: Dp, onSync: () -> Unit) {
                         UsageEmptyCard(
                             year = year,
                             month = month,
-                            syncing = state.billsSyncing
+                            syncing = syncing
                         )
                     }
                 } else {

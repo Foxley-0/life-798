@@ -22,10 +22,11 @@ android {
         applicationId = "com.life798.mini"
         minSdk = 26
         targetSdk = 35
-        // 2.0.0beta —— 双平台登录 + 胖乖生活洗衣 / 用水设备（beta）。
-        // versionCode 33 接在 1.5.5.5(32) 之后，保证从任何旧包都能直接覆盖安装。
-        versionCode = 33
-        versionName = "2.0.0beta"
+        // 2.1.0 —— 正式版：更名「一水通」，账单流水线重做，设备卡片统一。
+        // versionCode 34 接在 2.0.0beta(33) 之后，保证从任何旧包都能直接覆盖安装。
+        // 版本号只进不退：beta 用满 2.0.x 之后，正式版直接上 2.1.0。
+        versionCode = 34
+        versionName = "2.1.0"
 
         buildConfigField("String", "API_GATEWAY", "\"${secret("API_GATEWAY")}\"")
         buildConfigField("String", "APP_SIGN_SALT", "\"${secret("APP_SIGN_SALT")}\"")

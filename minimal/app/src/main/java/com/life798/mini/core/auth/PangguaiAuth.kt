@@ -1,5 +1,6 @@
 package com.life798.mini.core.auth
 
+import com.life798.mini.core.AccountInfo
 import com.life798.mini.core.ApiResult
 import com.life798.mini.core.Platform
 import com.life798.mini.core.PlatformAuth
@@ -48,9 +49,11 @@ class PangguaiAuth(
             is ApiResult.Err -> login
         }
 
-    override suspend fun verify(token: String): ApiResult<String> =
+    override suspend fun verify(token: String): ApiResult<AccountInfo> =
         when (val r = api.userInfo(token)) {
-            is ApiResult.Ok -> ApiResult.Ok(r.data.phone)
+            is ApiResult.Ok -> ApiResult.Ok(
+                AccountInfo(uid = r.data.uid, phone = r.data.phone)
+            )
             is ApiResult.Err -> r
         }
 }

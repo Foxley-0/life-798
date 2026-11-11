@@ -60,9 +60,14 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.CameraController
-import com.life798.mini.core.DeviceEntry
 import com.life798.mini.core.DevicePrefs
+import com.life798.mini.core.Platform
+import com.life798.mini.core.laundry.LaundrySession
+import com.life798.mini.core.water.PangguaiWaterStore
 import com.life798.mini.scan.WxQrEngine
+import com.life798.mini.ui.devicecard.DeviceCardItem
+import com.life798.mini.ui.devicecard.DeviceSource
+import com.life798.mini.ui.water.PgWaterState
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -107,8 +112,12 @@ fun ScanScreen(
     onScanned: () -> Unit,
     /** 从设备列表点进来：同样解析编号，但**不记账**（不是真的扫过） */
     onPickDevice: (String) -> Boolean = onDecoded,
-    /** 点卡片上的设备行：进那台设备的页面（启动 / 用水由目标页自己判断） */
-    onOpenActive: () -> Unit = {},
+    /** 胖乖饮水 / 淋浴的运行态，「正在使用」要看它 */
+    pgWater: PgWaterState? = null,
+    /** 胖乖洗衣的运行态，允许同时多台 */
+    pgLaundry: List<LaundrySession> = emptyList(),
+    /** 点任意一张设备卡：去哪一页由调用方按平台 + 类型决定 */
+    onOpenDevice: (DeviceCardItem) -> Unit = {},
     /** 底栏占掉的高度。设备列表底部要避开它，否则最后一项会被胶囊压住 */
     bottomInset: Dp = 0.dp,
 ) {
@@ -121,43 +130,50 @@ fun ScanScreen(
     /** 是否在扫描。浮层的显示条件就是它的反 —— 不再单独维护 showCover。 */
     val scanning by CameraController.scanning.collectAsState()
 
-    // 常用设备按「平台 + 手机号」隔离：换账号或换平台就是另一个 key。
-    // key 必须用 activeOwnerKey 而不是 phone —— 同一手机号的两个平台 phone 相同，
-    // 只用 phone 做 remember key 不会重建仓库，会读到上一个平台的列表。
-    val devicePrefs = remember(state.activeOwnerKey) { DevicePrefs(context, state.phone) }
+    // 两个平台各一个仓库，key 还是老规矩（`favorites_<798手机号>` / `pangguai-favorites_<胖乖手机号>`），
+    // 存储格式一个字节都没改。读的时候由 DeviceSource 合并成一个列表，界面上不分平台。
+    val huiPrefs = remember(state.activeOwnerKey) {
+        DevicePrefs(context, state.phone, Platform.HUI798)
+    }
+    val pgPrefs = remember(state.activeOwnerKey) {
+        DevicePrefs(context, state.account(Platform.PANGGUAI).phone, Platform.PANGGUAI)
+    }
+    // 胖乖设备的真实分类（04 饮水 / 08 淋浴）只有这张表里有：扫码时服务端返回、随设备一起存下。
+    // 流水里没存类型，所以读列表时按编号回来查，不新增字段、不改格式。
+    val pgWaterStore = remember { PangguaiWaterStore(context) }
+    val source = remember(huiPrefs, pgPrefs, pgWaterStore) {
+        DeviceSource(huiPrefs, pgPrefs) { id, name ->
+            pgWaterStore.devices().firstOrNull {
+                it.sn == id || it.deviceId == id || it.imei == id ||
+                    (name.isNotBlank() && it.name == name)
+            }?.categoryCode
+        }
+    }
+
+    /** 某个条目属于哪个仓库 —— 改完要写回它自己的 key。 */
+    fun prefsOf(item: DeviceCardItem): DevicePrefs =
+        if (item.platform == Platform.PANGGUAI) pgPrefs else huiPrefs
+
     var deviceTick by remember { mutableStateOf(0) }
     // 扫描时清空：浮层已经淡出，没必要再算一遍列表
-    val favorites = remember(devicePrefs, scanning, deviceTick) {
-        if (scanning) emptyList() else devicePrefs.favorites()
+    val favorites = remember(source, scanning, deviceTick) {
+        if (scanning) emptyList() else source.favorites()
     }
-    val recent = remember(devicePrefs, scanning, deviceTick) {
-        if (scanning) emptyList() else devicePrefs.recentVisits()
+    val recent = remember(source, scanning, deviceTick) {
+        if (scanning) emptyList() else source.recent()
     }
 
     /**
-     * 卡片里要展示的设备：只认「正在使用」的会话，**不认扫到了但还没启动的设备号**。
+     * 卡片里要展示的设备：三个来源并列 —— 798 会话、胖乖水、胖乖洗衣。
      *
-     * 现在只有出水平台一条会话，所以最多一条。将来洗衣等其它平台各有一份会话，
-     * 在这里合并成列表就行 —— 卡片版式不用动，它会自动变成两行。
-     *
-     * 名字优先级：用户改过的别名 → 服务端返回的设备名 → 设备编号。
-     * 和常用设备区（`DeviceEntry.displayName`）同一套规则，避免同一台机器
-     * 在卡片里和在列表里叫两个名字。
+     * 不再是「只认 798 一条会话」：哪台在用就出哪台，797 的淋浴和胖乖的洗衣机
+     * 在同一张卡里的地位完全一样，只有图标和名字不同。
      */
-    val activeDevices = remember(state.session, favorites) {
-        state.session?.let { s ->
-            val alias = favorites.firstOrNull { it.id == s.deviceId }?.displayName
-            listOf(
-                HeroDevice(
-                    id = s.deviceId,
-                    name = alias ?: s.deviceName?.takeIf { it.isNotBlank() } ?: s.deviceId,
-                    startedAt = s.startedAt
-                )
-            )
-        } ?: emptyList()
+    val activeDevices = remember(state.session, pgWater, pgLaundry, favorites) {
+        source.active(state.session, pgWater, pgLaundry)
     }
 
-    var renaming by remember { mutableStateOf<DeviceEntry?>(null) }
+    var renaming by remember { mutableStateOf<DeviceCardItem?>(null) }
 
     /** 管理模式：只影响下面那几张设备卡，不接管整页、不隐藏底栏。 */
     var managing by remember { mutableStateOf(false) }
@@ -445,27 +461,24 @@ fun ScanScreen(
                     enabled = !managing,
                     onStartScan = { startScan() },
                     onOpenRecent = { showRecent = true },
-                    onOpenDevice = { onOpenActive() }
+                    onOpenDevice = onOpenDevice
                 )
 
                 DeviceSection(
                     favorites = favorites,
-                    activeDeviceId = state.session?.deviceId,
+                    // 跨平台，用 key 而不是裸编号：两个平台的设备编号可能撞车
+                    activeKeys = activeDevices.map { it.key }.toSet(),
                     managing = managing,
                     selected = selected,
-                    onPick = { id ->
-                        // 设备编号直接当二维码原文喂进去，复用整套解析 + 加载设备名。
-                        // 但不算「扫过」，不写流水。
-                        if (onPickDevice(id)) currentOnScanned()
-                    },
-                    onToggleSelect = { id ->
-                        selected = if (id in selected) selected - id else selected + id
+                    onPick = onOpenDevice,
+                    onToggleSelect = { key ->
+                        selected = if (key in selected) selected - key else selected + key
                     },
                     onSelectAll = {
                         selected = if (selected.size == favorites.size) {
                             emptySet()
                         } else {
-                            favorites.map { it.id }.toSet()
+                            favorites.map { it.key }.toSet()
                         }
                     },
                     onToggleManage = {
@@ -473,10 +486,14 @@ fun ScanScreen(
                         // 退出管理必须清空选择，否则下次进来还带着上次勾的
                         if (!managing) selected = emptySet()
                     },
-                    onRename = { entry -> renaming = entry },
+                    onRename = { item -> renaming = item },
                     onRemove = {
+                        val byKey = favorites.associateBy { it.key }
                         val count = selected.size
-                        selected.forEach { devicePrefs.removeFavorite(it) }
+                        // 按条目自己的平台写回对应 key，绝不串到另一个平台
+                        selected.forEach { key ->
+                            byKey[key]?.let { prefsOf(it).removeFavorite(it.deviceId) }
+                        }
                         selected = emptySet()
                         deviceTick++
                         Toast.makeText(context, "已移出 $count 台设备", Toast.LENGTH_SHORT).show()
@@ -523,17 +540,15 @@ fun ScanScreen(
     ) {
         RecentSheetContent(
             recent = recent,
-            favoriteIds = favorites.map { it.id }.toSet(),
+            favoriteKeys = favorites.map { it.key }.toSet(),
             listHeight = sheetListHeight,
-            onPick = { id ->
-                // 解析失败就不关抽屉，让用户换一台点
-                if (onPickDevice(id)) {
-                    showRecent = false
-                    currentOnScanned()
-                }
+            onPick = { item ->
+                showRecent = false
+                onOpenDevice(item)
             },
-            onAdd = { id ->
-                devicePrefs.addFavorite(id)
+            onAdd = { item ->
+                // 写回它自己平台的 key —— 从最近 7 天加进常用，不能全塞进 798 的账
+                prefsOf(item).addFavorite(item.deviceId)
                 deviceTick++
                 Toast.makeText(context, "已添加到常用设备", Toast.LENGTH_SHORT).show()
             }
@@ -573,11 +588,14 @@ fun ScanScreen(
     }
 
     // 改名弹窗放在浮层外面：它不该跟着浮层一起淡出
-    renaming?.let { entry ->
+    renaming?.let { item ->
+        // 别名存在 favorites 里，卡片模型不带它，改名前回查一次
+        val entry = prefsOf(item).favorites().firstOrNull { it.id == item.deviceId }
         RenameDialog(
-            entry = entry,
+            initialAlias = entry?.alias.orEmpty(),
+            summary = entry?.name,
             onConfirm = { alias ->
-                devicePrefs.renameFavorite(entry.id, alias)
+                prefsOf(item).renameFavorite(item.deviceId, alias)
                 deviceTick++
                 renaming = null
             },
@@ -622,16 +640,17 @@ private fun openAppSettings(context: android.content.Context) {
  */
 @Composable
 private fun RenameDialog(
-    entry: DeviceEntry,
+    initialAlias: String,
+    summary: String?,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var text by remember(entry.id) { mutableStateOf(entry.alias) }
+    var text by remember(initialAlias, summary) { mutableStateOf(initialAlias) }
 
     OverlayDialog(
         show = true,
         title = "重命名",
-        summary = entry.name.ifBlank { null },
+        summary = summary?.ifBlank { null },
         onDismissRequest = onDismiss
     ) {
         TextField(

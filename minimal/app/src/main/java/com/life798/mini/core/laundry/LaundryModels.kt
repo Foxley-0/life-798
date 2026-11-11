@@ -42,6 +42,14 @@ data class LaundrySession(
     val sessionId: String = java.util.UUID.randomUUID().toString(),
     val orderNo: String,
     val deviceId: String,
+    /**
+     * 设备二维码里的 NQT。
+     *
+     * [deviceId] 是服务端的 goodsId，**不能拿来重放扫码**：`prepare` 走的是
+     * `/goods/scan?nqt=`，goodsId 在那儿查不到东西。卡片上点这台洗衣机时要重新
+     * 走一遍识别，所以必须把原码留住。
+     */
+    val nqt: String = "",
     val deviceName: String,
     val skuId: String = "",
     val skuName: String = "",

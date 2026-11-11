@@ -124,7 +124,7 @@ fun LoginScreen(
 
         // 大标题当视觉重心，不用 logo
         Text(
-            text = if (platform == Platform.HUI798) "登录 798 小助手" else "登录胖乖生活",
+            text = if (platform == Platform.HUI798) "登录一水通" else "登录胖乖生活",
             fontSize = 34.sp,
             fontWeight = FontWeight.Bold,
             color = MiuixTheme.colorScheme.onSurface
@@ -316,7 +316,7 @@ fun LoginScreen(
  * 深浅色模式自动跟随，不写死颜色。
  */
 @Composable
-private fun PlatformSwitcher(
+internal fun PlatformSwitcher(
     selected: Platform,
     onSelect: (Platform) -> Unit,
 ) {

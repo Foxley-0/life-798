@@ -9,7 +9,9 @@ import com.life798.mini.core.ApiResult
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.PangguaiLaundryStore
 import com.life798.mini.core.laundry.LaundrySession
+import com.life798.mini.core.BillRecord
 import com.life798.mini.core.BillStore
+import com.life798.mini.core.BillSync
 import com.life798.mini.core.DevicePrefs
 import com.life798.mini.core.DeviceSession
 import com.life798.mini.core.DeviceSessionStore
@@ -27,7 +29,9 @@ import com.life798.mini.core.isAuthError
 import com.life798.mini.core.isNewerVersion
 import com.life798.mini.net.GithubMirror
 import com.life798.mini.net.PangguaiApi
+import com.life798.mini.net.PangguaiOrderApi
 import com.life798.mini.net.PangguaiWasherApi
+import com.life798.mini.net.PgOrder
 import com.life798.mini.net.PgWasherLaunch
 import com.life798.mini.net.PgAlipayLaunch
 import com.life798.mini.net.PgSku
@@ -150,6 +154,12 @@ data class UiState(
     val billsRevision: Int = 0,
     /** 账单同步失败的原因。本地数据照常显示，只在页面顶部提一句。 */
     val billsError: String? = null,
+    /** 正在同步胖乖历史订单。与 798 的 [billsSyncing] 各管各的，互不影响。 */
+    val pgBillsSyncing: Boolean = false,
+    /** 胖乖账本版本号：同步一次 +1。 */
+    val pgBillsRevision: Int = 0,
+    /** 胖乖订单同步失败的原因。 */
+    val pgBillsError: String? = null,
     val message: String? = null,
     /** 配合 [message]：true 表示这是错误提示，界面上用错误色。 */
     val messageIsError: Boolean = false,
@@ -208,6 +218,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** 胖乖洗衣机启动链路，复用 pangguaiApi 的请求头与信封解析。 */
     private val washerApi = PangguaiWasherApi(pangguaiApi)
 
+    /** 胖乖历史订单（账本页数据源）。列表给时间/金额/设备名，详情补升数与时长。 */
+    private val pgOrderApi = PangguaiOrderApi(app)
+
     /**
      * 两个平台的登录实现。登录页按当前平台取对应实现，
      * 两条链路互不调用、互不影响。
@@ -229,9 +242,25 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val billStore: BillStore
         get() = BillStore(app, _ui.value.phone, Platform.HUI798)
 
+    /**
+     * 胖乖账本。与 798 那本**物理隔离**（key 前缀 `pangguai-`），
+     * 同一个手机号在两边各有一份，互不覆盖。
+     */
+    private val pgBillStore: BillStore
+        get() = BillStore(app, _ui.value.account(Platform.PANGGUAI).phone, Platform.PANGGUAI)
+
     /** 常用设备 + 最近 7 天流水。同样按手机号隔离，跟账单各管各的。 */
     private val devicePrefs: DevicePrefs
         get() = DevicePrefs(app, _ui.value.phone, Platform.HUI798)
+
+    /**
+     * 胖乖的设备记录。key 是 `pangguai-visits_<胖乖手机号>`，和 798 那本物理隔离。
+     *
+     * 扫码页显示时会把两个仓库的记录合并成一个列表，但**写的时候各写各的** ——
+     * 合并存的话，登出 798 会把胖乖的设备记录一起带走。
+     */
+    private val pgDevicePrefs: DevicePrefs
+        get() = DevicePrefs(app, _ui.value.account(Platform.PANGGUAI).phone, Platform.PANGGUAI)
 
     /** 当前会话的落盘记录，用来在进程被杀后重新认领「还在流水」的设备。 */
     private val sessionStore = DeviceSessionStore(app, Platform.HUI798)
@@ -281,6 +310,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private var billSyncJob: Job? = null
 
+    /** 胖乖订单同步。与 798 那条独立，登出胖乖只掐这一条。 */
+    private var pgBillSyncJob: Job? = null
+
     private val updateApi = UpdateApi()
     private var updateJob: Job? = null
 
@@ -329,11 +361,13 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         when {
             result is ApiResult.Ok -> {
                 AppLog.i("Auth", "${session.platform.label} 冷启动校验通过")
+                // uid 和 phone 必须分开取：798 的 data.id 是账号 id，pn 才是手机号。
+                // phone 是账本 owner，取错了会把老账本甩到另一个 key 上。
                 markActive(
                     platform = session.platform,
                     token = session.token,
-                    uid = session.uid,
-                    phone = result.data.ifBlank { session.phone },
+                    uid = result.data.uid.ifBlank { session.uid },
+                    phone = result.data.phone.ifBlank { session.phone },
                 )
             }
 
@@ -536,6 +570,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         if (platform == Platform.HUI798) {
             billSyncJob?.cancel()
             billSyncJob = null
+        } else {
+            // 胖乖订单同步同理：不掐的话登出后仍会往旧账本里补详情
+            pgBillSyncJob?.cancel()
+            pgBillSyncJob = null
         }
 
         viewModelScope.launch {
@@ -561,6 +599,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     closed = if (is798) false else state.closed,
                     // 同步可能正跑到一半，残留的 true 会让下一个账号永远拉不了账单
                     billsSyncing = if (is798) false else state.billsSyncing,
+                    pgBillsSyncing = if (is798) state.pgBillsSyncing else false,
                     message = null,
                     messageIsError = false,
                 )
@@ -575,12 +614,13 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /**
      * 从服务端同步账单。
      *
-     * 分两步：
-     * 1. 拉第一页列表合并入库 —— 时间、金额、设备名立刻可显示
-     * 2. 本地缺升数的账单逐条补详情 —— 列表接口不带用量，只有详情有
+     * 具体流程全在 [BillSync] 里：列表一次拉全（服务端不截断，没有翻页），
+     * 详情 4 路并发补齐，攒批落盘。这里只负责三件事 ——
+     * 防重入、把结果翻译成 UI 状态、鉴权失效时清凭证。
      *
-     * 已经补过详情的不会重复拉，所以日常只多 1~2 次请求。
-     * 失败时不清本地数据，只把原因放进 [UiState.billsError]。
+     * **只在整轮结束后 `billsRevision + 1`**：账本页拿它当重算键，
+     * 中途改会让汇总卡的升数一路跳变。失败不清本地数据，只把原因放进
+     * [UiState.billsError]。
      */
     fun syncBills() {
         // 互斥看 Job 而不是 billsSyncing：标志只能防重入，
@@ -596,51 +636,116 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         // 光钉死实例还不够保险（cancel 只在挂起点生效），所以登出时
         // 还会把整条协程 cancel 掉 —— 见 logout()。
         val store = billStore
+        // 老版本把 uid 当手机号用过，账本可能落在 `bills_<uid>` 上。
+        // 每次同步前合并一次，幂等；没有遗留时只是一次内存里的 key 遍历。
+        store.migrateLegacyOwners()
 
         billSyncJob = viewModelScope.launch {
             _ui.value = _ui.value.copy(billsSyncing = true, billsError = null)
 
-            when (val list = api.billList(token, page = 0)) {
-                is ApiResult.Err -> {
-                    AppLog.w("Bill", "账单列表同步失败: ${list.message}")
-                    // 鉴权失效：清凭证回登录页。留一条「同步失败」只会误导用户
-                    if (handleAuthError(Platform.HUI798, list.code)) return@launch
-                    _ui.value = _ui.value.copy(billsSyncing = false, billsError = list.message)
-                    return@launch
+            val result = BillSync(api).run(token, store) { filled, remaining ->
+                AppLog.i("Bill", "补水进度：已补 $filled 条，仍缺 $remaining 条")
+            }
+
+            AppLog.i(
+                "Bill",
+                "同步结束：列表 ${result.listed} 条，新增 ${result.added} 条，" +
+                    "补详情 ${result.filled} 条，仍缺 ${result.pending} 条"
+            )
+
+            // 鉴权失效：清这个平台的凭证回登录页。本地账本一条都不动
+            if (result.failed && handleAuthError(Platform.HUI798, result.errorCode)) return@launch
+
+            // 只有真正跑通才记「今天已同步」。失败不记，不然一次网络抖动
+            // 会让用量页今天剩下的时间都不再刷新。
+            if (result.error == null) store.markSyncedToday()
+
+            _ui.value = _ui.value.copy(
+                billsSyncing = false,
+                billsRevision = _ui.value.billsRevision + 1,
+                billsError = result.error
+            )
+        }
+    }
+
+    // ---------------- 胖乖账本 ----------------
+
+    /**
+     * 把胖乖历史订单同步进本地账本。
+     *
+     * 与 798 的 [syncBills] 同构，只换数据源：`/order/list` + `/order/detail`。
+     * 1. 翻页拉订单（每页 40，不满一页即最后一页），先把时间/金额/设备名落库
+     * 2. 本地缺升数的订单逐条补详情 —— 列表接口的 `skuInfo` 是 null，只有详情有
+     *
+     * 详情是逐单请求，200 单一次拉完要几十秒，所以每轮只补 [detailBudget] 条，
+     * 剩下的下次下拉继续。已补过的不重复拉。
+     *
+     * 账本 key 带 `pangguai-` 前缀，与 798 那本物理隔离，不会串号。
+     */
+    fun syncPangguaiBills() {
+        if (pgBillSyncJob?.isActive == true) return
+        val session = _ui.value.account(Platform.PANGGUAI)
+        if (!session.isActive) return
+        val token = session.token
+        // 实例在入口钉死：补详情是长循环，中途换号不能写到新账号的账本上
+        val store = pgBillStore
+
+        pgBillSyncJob = viewModelScope.launch {
+            _ui.value = _ui.value.copy(pgBillsSyncing = true, pgBillsError = null)
+
+            val maxPages = 10
+            var page = 1
+            while (page <= maxPages) {
+                when (val r = pgOrderApi.page(token, page)) {
+                    is ApiResult.Err -> {
+                        AppLog.w("PgBill", "订单列表失败: ${r.message}")
+                        if (handleAuthError(Platform.PANGGUAI, r.code)) return@launch
+                        _ui.value = _ui.value.copy(
+                            pgBillsSyncing = false,
+                            pgBillsError = r.message
+                        )
+                        return@launch
+                    }
+
+                    is ApiResult.Ok -> {
+                        val added = store.merge(r.data.map { it.toBillRecord() })
+                        AppLog.i("PgBill", "第 $page 页 ${r.data.size} 条，新增 $added")
+                        if (r.data.size < PangguaiOrderApi.PAGE_SIZE) break
+                    }
                 }
+                page++
+            }
 
-                is ApiResult.Ok -> {
-                    val added = store.merge(list.data)
-                    AppLog.i("Bill", "账单列表 ${list.data.size} 条，新增 $added")
-
-                    var filled = 0
-                    var failed = 0
-                    for (id in store.missingDetail()) {
-                        when (val detail = api.billDetail(token, id)) {
-                            is ApiResult.Ok -> {
-                                val bill = detail.data
-                                if (bill.liters != null) {
-                                    store.updateDetail(id, bill.liters, bill.secs, bill.deviceName)
-                                    filled++
-                                }
-                            }
-                            is ApiResult.Err -> {
-                                // 鉴权失效：后面每一条都会失败，别再刷请求
-                                if (handleAuthError(Platform.HUI798, detail.code)) return@launch
-                                failed++
-                                AppLog.w("Bill", "详情失败 id=$id: ${detail.message}")
-                            }
+            val detailBudget = 60
+            var filled = 0
+            for (id in store.missingDetail().take(detailBudget)) {
+                when (val d = pgOrderApi.detail(token, id)) {
+                    is ApiResult.Ok -> {
+                        if (d.data.liters != null) {
+                            store.updateDetail(id, d.data.liters, d.data.secs, d.data.deviceName)
+                            filled++
                         }
                     }
-                    AppLog.i("Bill", "补详情 $filled 条，失败 $failed 条")
 
-                    _ui.value = _ui.value.copy(
-                        billsSyncing = false,
-                        billsRevision = _ui.value.billsRevision + 1,
-                        billsError = null
-                    )
+                    is ApiResult.Err -> {
+                        if (handleAuthError(Platform.PANGGUAI, d.code)) return@launch
+                        AppLog.w("PgBill", "详情失败 id=$id: ${d.message}")
+                    }
                 }
+                // 逐单请求，别把服务端打满
+                delay(80)
             }
+            AppLog.i("PgBill", "补水量 $filled 条，仍缺 ${store.missingDetail().size} 条")
+
+            // 走到这里才算这一轮跑通（列表失败的路早就 return 了）。
+            // 详情失败只影响个别账单的升数，不算整轮失败，照样落戳。
+            store.markSyncedToday()
+
+            _ui.value = _ui.value.copy(
+                pgBillsSyncing = false,
+                pgBillsRevision = _ui.value.pgBillsRevision + 1,
+                pgBillsError = null
+            )
         }
     }
 
@@ -701,6 +806,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         )
                     }
                     preparePangguaiWasher(r.nqt)
+                    // 扫码即记一笔：设备名这会儿还没有，等预检回来再补。
+                    // 和 798 一样写进「最近 7 天」，卡片才有数据可显示。
+                    if (record) pgDevicePrefs.recordVisit(r.nqt, "")
                     true
                 }
             }
@@ -975,10 +1083,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         orderNo: String,
         price: String,
     ) {
+        val nqt = _ui.value.pangguaiWasher?.nqt.orEmpty()
         laundryController.add(
             LaundrySession(
                 orderNo = orderNo,
                 deviceId = ready.goods.goodsId,
+                nqt = nqt,
                 deviceName = ready.goods.name,
                 skuId = sku.skuId,
                 skuName = sku.name,
@@ -987,6 +1097,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 minutes = sku.unitMinutes,
             )
         )
+        // 设备名这时才拿到，补回最近 7 天那条记录（扫码时只记了编号）
+        if (nqt.isNotBlank()) pgDevicePrefs.updateName(nqt, ready.goods.name)
         val launch = PgWasherLaunch(
             orderNo = orderNo,
             deviceName = ready.goods.name,
@@ -1460,3 +1572,18 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(updateDownloadUrl = null)
     }
 }
+
+/**
+ * 胖乖订单 → 账本条目。
+ *
+ * 只是换了个数据源，账本形状不变：`waterUseValue`（毫升）在 API 层已经除过 1000，
+ * 所以这里 [PgOrder.liters] 直接就是升，和 798 的 `dev.subs[0].out` 同量纲。
+ */
+private fun PgOrder.toBillRecord(): BillRecord = BillRecord(
+    id = id,
+    at = at,
+    yuan = yuan,
+    deviceName = deviceName,
+    liters = liters,
+    secs = secs
+)

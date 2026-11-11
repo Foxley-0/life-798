@@ -25,13 +25,28 @@ interface PlatformAuth {
     suspend fun login(phone: String, smsCode: String): ApiResult<RawSession>
 
     /**
-     * 校验 token。
+     * 校验 token，并把服务端认定的账号身份带回来。
      *
-     * 成功时返回服务端的手机号：登录是否真的成功，以「第二次请求拿到的号码对得上」
-     * 为准，而不是只看 `code == 0`。
+     * 登录是否真的成功，以「第二次请求拿到的号码对得上」为准，而不是只看 `code == 0`。
+     *
+     * **必须区分 [AccountInfo.uid] 和 [AccountInfo.phone]**：
+     * 798 的 `/acc/view-info` 里 `id` 是 16 位十六进制的账号 id（形如
+     * `13a0702bb1409000`），`pn` 才是手机号。曾经把 `id` 当手机号回填，
+     * 结果账本 owner 从手机号变成 uid，升级后老账本一夜之间「消失」——
+     * 数据还在，只是 key 变了。所以这里返回结构体，两个字段各归各位。
      */
-    suspend fun verify(token: String): ApiResult<String>
+    suspend fun verify(token: String): ApiResult<AccountInfo>
 }
+
+/**
+ * 服务端认定的账号身份。
+ *
+ * [uid] 只用于展示/排查，[phone] 才是账本、常用设备这些本地数据的 owner。
+ */
+data class AccountInfo(
+    val uid: String = "",
+    val phone: String = "",
+)
 
 /** 登录成功后、落盘前的中转结构。 */
 data class RawSession(

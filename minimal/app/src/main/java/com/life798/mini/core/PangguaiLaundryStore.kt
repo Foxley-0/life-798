@@ -44,6 +44,7 @@ class PangguaiLaundryStore(context: Context) {
         .put("sessionId", s.sessionId)
         .put("orderNo", s.orderNo)
         .put("deviceId", s.deviceId)
+        .put("nqt", s.nqt)
         .put("deviceName", s.deviceName)
         .put("skuId", s.skuId)
         .put("skuName", s.skuName)
@@ -60,6 +61,7 @@ class PangguaiLaundryStore(context: Context) {
         sessionId = o.optString("sessionId").ifBlank { java.util.UUID.randomUUID().toString() },
         orderNo = o.optString("orderNo"),
         deviceId = o.optString("deviceId"),
+        nqt = o.optString("nqt"),
         deviceName = o.optString("deviceName"),
         skuId = o.optString("skuId"),
         skuName = o.optString("skuName"),

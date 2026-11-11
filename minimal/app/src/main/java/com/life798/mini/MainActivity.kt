@@ -53,7 +53,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.life798.mini.core.AppLog
+import com.life798.mini.core.Platform
 import com.life798.mini.core.water.PgWaterPhase
+import com.life798.mini.ui.devicecard.DeviceKind
 import com.life798.mini.scan.QrParser
 import com.life798.mini.scan.QrResult
 import com.life798.mini.ui.water.PangguaiWaterViewModel
@@ -764,17 +766,46 @@ private fun MainContent(
                                         )
                                     }
                                 },
-                                // 卡片上的设备行：点哪台进哪台的页面。
-                                // 现在卡里只会出现正在使用的设备，所以一律进用水页；
-                                // 将来卡片容纳多个平台的设备时，按行所属的 deviceId 分流。
-                                // push 自带去重（栈顶已是 USING 时忽略），连点不会叠两层。
-                                onOpenActive = { onPush(Route.USING) },
+                                // 胖乖的运行态：三处卡片要和 798 一视同仁，必须喂进来
+                                pgWater = waterState,
+                                pgLaundry = state.laundrySessions,
+                                // 点任意一张设备卡：卡片只回传「是谁」，去哪一页在这里分流。
+                                // 三条链路各走各的，卡片本身不知道洗衣和淋浴有什么区别。
+                                onOpenDevice = { item ->
+                                    when {
+                                        // 胖乖洗衣：NQT 码交给 ViewModel 重放扫码流程，
+                                        // 不记流水（不是真的扫过）
+                                        item.platform == Platform.PANGGUAI &&
+                                            item.kind == DeviceKind.WASHER -> {
+                                            vm.onQrDecoded(item.deviceId, record = false)
+                                            onPush(Route.PANGGUAI_START)
+                                        }
+                                        // 胖乖饮水 / 淋浴：交给独立的用水 ViewModel
+                                        item.platform == Platform.PANGGUAI -> {
+                                            waterVm.onScan(item.deviceId)
+                                            onPush(Route.PANGGUAI_WATER_START)
+                                        }
+                                        // 798：编号当二维码原文喂回去，复用整套解析
+                                        else -> {
+                                            vm.onQrDecoded(item.deviceId, record = false)
+                                            val active = state.session
+                                            onPush(
+                                                if (active != null && active.deviceId == item.deviceId) {
+                                                    Route.USING
+                                                } else {
+                                                    Route.START
+                                                }
+                                            )
+                                        }
+                                    }
+                                },
                             )
 
                             1 -> UsageScreen(
                                 state = state,
                                 bottomInset = bottomInset,
-                                onSync = vm::syncBills
+                                onSyncHui798 = vm::syncBills,
+                                onSyncPangguai = vm::syncPangguaiBills
                             )
 
                             else -> SettingsScreen(
