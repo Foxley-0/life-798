@@ -66,6 +66,7 @@ import com.life798.mini.core.laundry.LaundrySession
 import com.life798.mini.core.water.PangguaiWaterStore
 import com.life798.mini.scan.WxQrEngine
 import com.life798.mini.ui.devicecard.DeviceCardItem
+import com.life798.mini.ui.devicecard.DeviceKind
 import com.life798.mini.ui.devicecard.DeviceSource
 import com.life798.mini.ui.water.PgWaterState
 import top.yukonga.miuix.kmp.basic.Button
@@ -120,6 +121,8 @@ fun ScanScreen(
     onOpenDevice: (DeviceCardItem) -> Unit = {},
     /** 底栏占掉的高度。设备列表底部要避开它，否则最后一项会被胶囊压住 */
     bottomInset: Dp = 0.dp,
+    /** 点重要提示条上的「去登录」：由调用方决定去添加账号页还是先切平台 */
+    onFixAccount: (Platform) -> Unit = {},
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -441,20 +444,19 @@ fun ScanScreen(
             ) {
                 PageTop()
 
-                // 只有胖乖在线、798 没登录时，扫码主流程没有可用的身份。
-                // 不把用户踢回登录页（另一个平台还在线），只在这里提示去哪里补登。
-                if (!state.hui798Active) {
-                    Text(
-                        text = "惠生活798 未登录，扫码后无法启动设备。请到设置页登录。",
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.error,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-                    )
-                }
+                // 重要情况提示条：凭证失效、未登录这类会让主流程失效的状态，
+                // 统一由 NoticeCenter 从账号状态派生，这里只负责摆位置。
+                // 不把用户踢回登录页（另一个平台可能还在线），只提示并给一个入口。
+                val notices = buildNotices(state, onFixAccount)
+                NoticeStack(
+                    notices = notices,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                )
 
                 // 页头到卡片 52dp：这段留白是整页的呼吸区。
-                // 挤到 20 出头，视觉重心会重新回到上半屏 —— 就是之前被打回的那版
-                Spacer(Modifier.height(52.dp))
+                // 挤到 20 出头，视觉重心会重新回到上半屏 —— 就是之前被打回的那版。
+                // 有提示条时收到 14dp：它自己已经占了一段，再留 52 会把主卡压下去。
+                Spacer(Modifier.height(if (notices.isEmpty()) 52.dp else 14.dp))
 
                 HeroCard(
                     devices = activeDevices,
@@ -466,8 +468,13 @@ fun ScanScreen(
 
                 DeviceSection(
                     favorites = favorites,
-                    // 跨平台，用 key 而不是裸编号：两个平台的设备编号可能撞车
-                    activeKeys = activeDevices.map { it.key }.toSet(),
+                    // 跨平台，用 key 而不是裸编号：两个平台的设备编号可能撞车。
+                    // 完成态不算「在用」—— 否则下面常用设备里那张同编号的卡会挂上「在用」，
+                    // 和「洗衣已完成」自相矛盾
+                    activeKeys = activeDevices
+                        .filter { it.kind != DeviceKind.WASHER_DONE }
+                        .map { it.key }
+                        .toSet(),
                     managing = managing,
                     selected = selected,
                     onPick = onOpenDevice,

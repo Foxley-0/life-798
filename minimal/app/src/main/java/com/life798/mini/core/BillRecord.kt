@@ -1,6 +1,7 @@
 package com.life798.mini.core
 
 import android.content.Context
+import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
@@ -37,11 +38,42 @@ data class BillRecord(
      * [BillStore.missingDetail] 队头，每轮同步都白跑一遍，把真正能补的挤掉。
      * 界面上的表现和不标记时一样：升数显示「—」。
      */
-    val dead: Boolean = false
-)
+    val dead: Boolean = false,
+    /**
+     * 设备类型码，服务端原样存的 `goodsCategory`：`"04"` 饮水、`"08"` 淋浴、`"00"` 洗衣。
+     *
+     * 这里存**码**而不是 `DeviceKind`：本类在 `core` 包，`DeviceKind` 在
+     * `ui.devicecard` 包，反过来依赖会让 core 依赖 UI。码只有 2 个字符，
+     * 存进去几乎不占空间，映射成图标交给界面层做。
+     *
+     * 798 的账单在构造时就写死 `"08"`（惠生活全是淋浴/热水龙头）；
+     * 胖乖的账单来自订单接口，老记录可能拿不到码，此时为 null。
+     */
+    val category: String? = null
+) {
+    companion object {
+        /** 服务端 `goodsCategory` 的取值：饮水。 */
+        const val CATEGORY_DRINK = "04"
+
+        /** 服务端 `goodsCategory` 的取值：淋浴。 */
+        const val CATEGORY_SHOWER = "08"
+    }
+}
 
 /** 一段时间的合计。升数和金额分开累加，因为升数可能还没补全。 */
 data class BillTotals(val liters: Double, val yuan: Double)
+
+/**
+ * 按用水类型拆开的合计：饮水、淋浴各一份。
+ *
+ * 账本页的总用水/月份用水都要分这两类显示 —— 两个平台单价不同、单价也随类型不同，
+ * 混在一起的「24.65 升」看不出是接的水还是洗的澡。
+ */
+data class SplitTotals(val drink: BillTotals, val shower: BillTotals) {
+    /** 两类相加，等于不分类型时的合计。 */
+    val all: BillTotals
+        get() = BillTotals(drink.liters + shower.liters, drink.yuan + shower.yuan)
+}
 
 /**
  * 账单本地仓库。
@@ -116,7 +148,10 @@ class BillStore(
                     liters = old.liters ?: bill.liters,
                     secs = old.secs ?: bill.secs,
                     deviceName = bill.deviceName ?: old.deviceName,
-                    dead = old.dead
+                    dead = old.dead,
+                    // 接口这次没带类型码（胖乖的老订单常见）时，保住本地已有的那个，
+                    // 否则会被刷成 null，下一轮 parse 又得重新猜一遍。
+                    category = bill.category ?: old.category
                 )
             }
         }
@@ -165,14 +200,23 @@ class BillStore(
 
     /** 详情拉回来之后补字段。 */
     @Synchronized
-    fun updateDetail(id: String, liters: Double?, secs: Double?, deviceName: String?) {        if (liters == null) return
+    fun updateDetail(
+        id: String,
+        liters: Double?,
+        secs: Double?,
+        deviceName: String?,
+        category: String? = null,
+    ) {
+        if (liters == null) return
         val list = read().toMutableList()
         val index = list.indexOfFirst { it.id == id }
         if (index < 0) return
         list[index] = list[index].copy(
             liters = liters,
             secs = secs,
-            deviceName = deviceName ?: list[index].deviceName
+            deviceName = deviceName ?: list[index].deviceName,
+            // 详情拿不到类型码时保留列表阶段写进去的那个，不能抹成 null
+            category = category ?: list[index].category
         )
         write(list)
     }
@@ -239,15 +283,46 @@ class BillStore(
         )
     }
 
+    /** 某月按饮水/淋浴拆开的合计。 */
+    @Synchronized
+    fun monthSplit(year: Int, month: Int): SplitTotals = splitOf(monthBills(year, month))
+
+    /** 某年按饮水/淋浴拆开的合计。 */
+    @Synchronized
+    fun yearSplit(year: Int): SplitTotals =
+        splitOf(all().filter { it.at.toLocalDate().year == year })
+
+    /**
+     * 一组账单按类型拆开。
+     *
+     * 判据只认淋浴码 `"08"`，其余（`"04"` 以及迁移前遗留的 null）都算饮水。
+     * 两个平台的历史数据已经用 `backfillCategory` 补齐过码，null 只剩极端脏数据。
+     */
+    private fun splitOf(bills: List<BillRecord>): SplitTotals {
+        fun sum(shower: Boolean) = BillTotals(
+            liters = bills.filter { (it.category == BillRecord.CATEGORY_SHOWER) == shower }
+                .mapNotNull { it.liters }.sum(),
+            yuan = bills.filter { (it.category == BillRecord.CATEGORY_SHOWER) == shower }
+                .sumOf { it.yuan }
+        )
+        return SplitTotals(drink = sum(shower = false), shower = sum(shower = true))
+    }
+
     /** 某月有记录的天数。 */
     @Synchronized
     fun monthDays(year: Int, month: Int): Int =
         monthBills(year, month).map { it.at.toLocalDate() }.distinct().size
 
-    /** 某月每天的用量，key 是「日」(1..31)，给日历上色用。 */
+    /**
+     * 某月每天的用量，key 是「日」(1..31)。
+     *
+     * @param category 传 `CATEGORY_DRINK` / `CATEGORY_SHOWER` 只统计该类；不传就是合计，
+     *   与加这个参数之前的行为完全一致。
+     */
     @Synchronized
-    fun monthDailyLiters(year: Int, month: Int): Map<Int, Double> =
+    fun monthDailyLiters(year: Int, month: Int, category: String? = null): Map<Int, Double> =
         monthBills(year, month)
+            .filter { category == null || it.category == category }
             .groupBy { it.at.toLocalDate().dayOfMonth }
             .mapValues { (_, bills) -> bills.mapNotNull { it.liters }.sum() }
 
@@ -286,20 +361,41 @@ class BillStore(
                     val id = item.optString("id")
                     val at = item.optLong("at", 0L)
                     if (id.isBlank() || at <= 0L) continue
+                    val name = item.optString("n").takeIf { it.isNotBlank() }
                     add(
                         BillRecord(
                             id = id,
                             at = at,
                             yuan = item.optDouble("y", 0.0),
-                            deviceName = item.optString("n").takeIf { it.isNotBlank() },
+                            deviceName = name,
                             liters = if (item.has("l")) item.optDouble("l") else null,
                             secs = if (item.has("s")) item.optDouble("s") else null,
-                            dead = item.optBoolean("d", false)
+                            dead = item.optBoolean("d", false),
+                            category = item.optString("c").takeIf { it.isNotBlank() }
+                                ?: guessCategory(name)
                         )
                     )
                 }
             }
         }.getOrDefault(emptyList())
+    }
+
+    /**
+     * 老账本没有类型码时的兜底。
+     *
+     * 加 `category` 之前的记录只有设备名，实测设备上两本账本的形状是：
+     * - 798：「雅3——1洗热间—热水龙头5」「雅3——1洗热间—淋浴6」→ 淋浴
+     * - 胖乖：「雅3-1热」「雅3-1冷」「静4-4热」→ 饮水机的热/冷水口
+     *
+     * 所以只认「淋浴 / 热水龙头 / 洗热」这几个明确指向淋浴的字样，其余按饮水。
+     * 这是启发式、不是权威：新账单都自带服务端的 `goodsCategory`，根本走不到这里；
+     * 只有「加字段之前就已存在、且服务端已清账查不回来」的那几条才用得上，
+     * 判错了也不会覆盖任何权威数据。
+     */
+    private fun guessCategory(name: String?): String {
+        val n = name.orEmpty()
+        val shower = n.contains("淋浴") || n.contains("热水龙头") || n.contains("洗热")
+        return if (shower) BillRecord.CATEGORY_SHOWER else BillRecord.CATEGORY_DRINK
     }
 
     /**
@@ -355,6 +451,7 @@ class BillStore(
             bill.liters?.let { obj.put("l", round3(it)) }
             bill.secs?.let { obj.put("s", it) }
             if (bill.dead) obj.put("d", true)
+            bill.category?.let { obj.put("c", it) }
             array.put(obj)
         }
         // 账单是用户唯一的历史记录，用 commit 同步落盘，进程被杀也不丢
@@ -373,6 +470,98 @@ class BillStore(
 
         /** 账本归属只可能是手机号，11 位数字。 */
         private val PHONE = Regex("""\d{11}""")
+
+        /**
+         * 「存量账单已补类型码」的落戳，毫秒时间。0 / 不存在表示还没跑过。
+         *
+         * 用时间戳而不是布尔：既是「跑过了」的开关，也顺手记下分界线，
+         * 排查时能知道哪一批算存量。
+         */
+        private const val TAG_AT = "catTagAt"
+
+        /** 「上一版归档标已清理」的落戳，和 [TAG_AT] 分开，两件事各自幂等。 */
+        private const val CLEAN_AT = "catLegacyCleanAt"
+
+        /**
+         * 给加 [BillRecord.category] 之前的 798 存量账单补上「淋浴」码，
+         * 并清掉上一版误加的 `"a"`（归档标）残留。
+         *
+         * 798 那些数据全是淋浴/热水龙头（惠生活在该账号下没有饮水单），
+         * 但盘上一条 `c` 都没有 —— 只有读的时候才临时猜一个。不落盘的话：
+         * - 以后做饮水/淋浴分开统计，这批老账要么被算进「未知」，要么每次都要靠名字猜
+         * - 名字判据（含「淋浴/热水龙头/洗热」）对这批数据恰好成立，但那是巧合，不该依赖
+         *
+         * 所以一次性写死：**只给 798 的账本（`bills_*`）补码**，**只补缺 `c` 的**，
+         * 已有码的一律不动 —— 将来 798 真有饮水单，接口给的 `"04"` 不会被这里覆盖。
+         * 胖乖的 key 以 `pangguai-` 开头，不会被误改。
+         *
+         * 清理 `"a"` 则要扫两本账（上一版对胖乖全量写过这个键），单独一个落戳。
+         *
+         * 直接改原始 JSON 再写回，不走 [write] —— 不排序、不截断、不做数值四舍五入，
+         * 条数、顺序、金额与改动前逐字一致。中途被杀则落戳不写，下次重跑幂等。
+         */
+        fun backfillCategory(context: Context) {
+            val sp = context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val bookKeys = sp.all.keys.filter { bookKey ->
+                bookKey.startsWith(KEY_PREFIX) ||
+                    bookKey.startsWith(Platform.PANGGUAI.prefix + KEY_PREFIX)
+            }
+            if (bookKeys.isEmpty()) return
+
+            // ---------- 第一步：798 补淋浴码 ----------
+            if (sp.getLong(TAG_AT, 0L) <= 0L) {
+                var books = 0
+                var tagged = 0
+                bookKeys.filter { it.startsWith(KEY_PREFIX) }.forEach { bookKey ->
+                    val array = readArray(sp, bookKey) ?: return@forEach
+                    for (i in 0 until array.length()) {
+                        val obj = array.optJSONObject(i) ?: continue
+                        if (obj.optString("c").isBlank()) {
+                            obj.put("c", BillRecord.CATEGORY_SHOWER)
+                            tagged++
+                        }
+                    }
+                    // commit 同步落盘：账本是用户唯一的历史，宁可慢一点也不能丢
+                    sp.edit().putString(bookKey, array.toString()).commit()
+                    books++
+                }
+                sp.edit().putLong(TAG_AT, System.currentTimeMillis()).apply()
+                AppLog.i("Bill", "798 存量账单补分类：$books 本账本、补 $tagged 条（淋浴）")
+            }
+
+            // ---------- 第二步：清掉归档标残渣 ----------
+            if (sp.getLong(CLEAN_AT, 0L) <= 0L) {
+                var books = 0
+                var cleaned = 0
+                bookKeys.forEach { bookKey ->
+                    val array = readArray(sp, bookKey) ?: return@forEach
+                    var touched = false
+                    for (i in 0 until array.length()) {
+                        val obj = array.optJSONObject(i) ?: continue
+                        if (obj.has("a")) {
+                            obj.remove("a")
+                            cleaned++
+                            touched = true
+                        }
+                    }
+                    if (touched) {
+                        sp.edit().putString(bookKey, array.toString()).commit()
+                        books++
+                    }
+                }
+                val editor = sp.edit().putLong(CLEAN_AT, System.currentTimeMillis())
+                // 上一版的落戳已经没用了，顺手删掉，别在盘上留两个含义相近的 key
+                if (sp.contains("catArchiveAt")) editor.remove("catArchiveAt")
+                editor.apply()
+                AppLog.i("Bill", "清理归档标残留：$books 本账本、$cleaned 条")
+            }
+        }
+
+        private fun readArray(sp: SharedPreferences, key: String): JSONArray? {
+            val raw = sp.getString(key, null) ?: return null
+            return runCatching { JSONArray(raw) }.getOrNull()
+        }
 
         /**
          * 删掉「按账号隔离」之前的单份账本。

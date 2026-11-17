@@ -184,6 +184,15 @@ data class UiState(
     val pangguaiWasher: PgWasherUi? = null,
     /** 胖乖洗衣运行态（可多台），与 798 的 [session] 完全独立。 */
     val laundrySessions: List<LaundrySession> = emptyList(),
+    /**
+     * 正在查看的洗衣状态页对应的会话 id；null 表示没打开。
+     *
+     * 只存 id 不存对象：状态页渲染时从 [laundrySessions] 里取，轮询把数据刷新后
+     * 页面能直接跟着变，不会定格在打开那一刻的快照。
+     */
+    val washingSessionId: String? = null,
+    /** 状态页正在拉取最新状态，按钮显示「刷新中…」。 */
+    val washingRefreshing: Boolean = false,
 ) {
     fun account(platform: Platform): PlatformSession =
         accounts[platform] ?: PlatformSession(platform)
@@ -281,6 +290,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         store = laundryStore,
         tokenProvider = { _ui.value.account(Platform.PANGGUAI).token },
         emit = { list -> _ui.update { it.copy(laundrySessions = list) } },
+        // 轮询自己发现登录失效时，也走业务请求那条统一出口：
+        // 置 EXPIRED 之后，扫描页提示条、设置页「已失效 / 重新登录」都会跟着出现。
+        onAuthExpired = { code ->
+            viewModelScope.launch { handleAuthError(Platform.PANGGUAI, code) }
+        },
     )
 
     init {
@@ -290,6 +304,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         // 新 key（bills_<owner> / favorites_<owner>）一个都不碰。
         BillStore.clearLegacy(app)
         DevicePrefs.clearLegacy(app)
+        // 加分类字段之前的 798 存量账单补上「淋浴」码（那批全是淋浴/热水龙头）。
+        // 带落戳，只跑一次；没有账本时也只是一次 getLong + 一次 key 过滤。
+        BillStore.backfillCategory(app)
     }
 
     /** 同一个码 3 秒内只提示一次，否则每帧识别都会触发一次 */
@@ -326,7 +343,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             val stored = sessionPrefs.loadAll()
-            _ui.update { it.copy(accounts = stored, ready = false) }
+            _ui.update { s -> s.copy(accounts = stored, ready = false) }
 
             // 两个平台并行校验。任一通过就足以放行；
             // 某个平台网络失败不影响另一个平台，也不把人挡在门外。
@@ -581,6 +598,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             if (platform == Platform.HUI798) {
                 // 会话记录也要清：换账号登录后不能把上一账号的水认领过来
                 sessionStore.clear()
+            } else {
+                // 胖乖同理：停轮询并清掉洗衣记录，否则首页会留一张点不动的洗衣卡
+                laundryController.clear()
             }
 
             _ui.update { state ->
@@ -693,27 +713,39 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         pgBillSyncJob = viewModelScope.launch {
             _ui.value = _ui.value.copy(pgBillsSyncing = true, pgBillsError = null)
 
+            /*
+             * 按分类分别拉：003 饮水、004 淋浴。
+             *
+             * 服务端的 `displayTag` 就是分类开关（官方 App 的账单页一次拉一类），
+             * 不传时返回什么没有保证。账本只要饮水和淋浴两类，洗衣不记账，不请求。
+             * 每类各自翻页，互不影响条数判断。
+             */
             val maxPages = 10
-            var page = 1
-            while (page <= maxPages) {
-                when (val r = pgOrderApi.page(token, page)) {
-                    is ApiResult.Err -> {
-                        AppLog.w("PgBill", "订单列表失败: ${r.message}")
-                        if (handleAuthError(Platform.PANGGUAI, r.code)) return@launch
-                        _ui.value = _ui.value.copy(
-                            pgBillsSyncing = false,
-                            pgBillsError = r.message
-                        )
-                        return@launch
-                    }
+            for (tag in listOf(PangguaiOrderApi.TAG_DRINK, PangguaiOrderApi.TAG_SHOWER)) {
+                var page = 1
+                while (page <= maxPages) {
+                    when (val r = pgOrderApi.page(token, page, tag)) {
+                        is ApiResult.Err -> {
+                            AppLog.w("PgBill", "订单列表失败 tag=$tag: ${r.message}")
+                            if (handleAuthError(Platform.PANGGUAI, r.code)) return@launch
+                            _ui.value = _ui.value.copy(
+                                pgBillsSyncing = false,
+                                pgBillsError = r.message
+                            )
+                            return@launch
+                        }
 
-                    is ApiResult.Ok -> {
-                        val added = store.merge(r.data.map { it.toBillRecord() })
-                        AppLog.i("PgBill", "第 $page 页 ${r.data.size} 条，新增 $added")
-                        if (r.data.size < PangguaiOrderApi.PAGE_SIZE) break
+                        is ApiResult.Ok -> {
+                            val added = store.merge(r.data.map { it.toBillRecord() })
+                            AppLog.i(
+                                "PgBill",
+                                "tag=$tag 第 $page 页 ${r.data.size} 条，新增 $added"
+                            )
+                            if (r.data.size < PangguaiOrderApi.PAGE_SIZE) break
+                        }
                     }
+                    page++
                 }
-                page++
             }
 
             val detailBudget = 60
@@ -722,7 +754,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 when (val d = pgOrderApi.detail(token, id)) {
                     is ApiResult.Ok -> {
                         if (d.data.liters != null) {
-                            store.updateDetail(id, d.data.liters, d.data.secs, d.data.deviceName)
+                            store.updateDetail(
+                                id,
+                                d.data.liters,
+                                d.data.secs,
+                                d.data.deviceName,
+                                // 详情也带类型码，顺手补齐列表阶段没拿到的老记录
+                                d.data.category
+                            )
                             filled++
                         }
                     }
@@ -870,6 +909,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
 
                 is ApiResult.Err -> {
+                    // 登录失效不是「预检失败」，是账号不能用：先走统一出口，
+                    // 页面会切到「去重新登录」，不要显示成普通错误
+                    if (handleAuthError(Platform.PANGGUAI, r.code)) return@launch
                     AppLog.w("Pangguai", "扫码预检失败: ${r.message}")
                     _ui.update {
                         it.copy(
@@ -908,12 +950,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     )
                 }
 
-                is ApiResult.Err -> _ui.update {
-                    it.copy(
-                        pangguaiWasher = it.pangguaiWasher?.copy(
-                            quoteLoading = false, error = r.message,
+                is ApiResult.Err -> {
+                    if (handleAuthError(Platform.PANGGUAI, r.code)) return@launch
+                    _ui.update {
+                        it.copy(
+                            pangguaiWasher = it.pangguaiWasher?.copy(
+                                quoteLoading = false, error = r.message,
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -959,6 +1004,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
 
                 is ApiResult.Err -> {
+                    if (handleAuthError(Platform.PANGGUAI, r.code)) return@launch
                     AppLog.w("Pangguai", "桶自洁启动失败: ${r.message}")
                     failPangguai(r.message)
                 }
@@ -992,6 +1038,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             ) {
                 is ApiResult.Ok -> r.data
                 is ApiResult.Err -> {
+                    if (handleAuthError(Platform.PANGGUAI, r.code)) return@launch
                     failPangguai(r.message)
                     return@launch
                 }
@@ -1016,7 +1063,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                is ApiResult.Err -> failPangguai(r.message)
+                is ApiResult.Err -> {
+                    if (handleAuthError(Platform.PANGGUAI, r.code)) return@launch
+                    failPangguai(r.message)
+                }
             }
         }
     }
@@ -1138,6 +1188,55 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** 关掉胖乖卡片，回到普通扫码。运行态在 laundrySessions 里，不受影响。 */
     fun clearPangguaiWasher() {
         _ui.update { it.copy(pangguaiWasher = null) }
+    }
+
+    /**
+     * 打开洗衣状态页。
+     *
+     * 由 MainActivity 在「这台洗衣机有本地进行中的会话」时调用，只切页面、
+     * 不动卡片与扫码数据；进页面顺手拉一次详情，拿服务端最新的结束时间。
+     */
+    fun openWashing(sessionId: String) {
+        _ui.update { it.copy(washingSessionId = sessionId) }
+        refreshWashing()
+    }
+
+    /** 离开状态页。会话本身留在 laundrySessions 里，由轮询继续核对结束。 */
+    fun closeWashing() {
+        _ui.update { it.copy(washingSessionId = null, washingRefreshing = false) }
+    }
+
+    /**
+     * 清除一条终态洗衣记录 —— 首页那张「洗衣已完成，请取衣」卡随之消失。
+     *
+     * 只删本地会话，**不取消服务端订单**：用户已经洗完了，删的只是这张提醒。
+     * 清除后立刻关掉状态页：页面拿到的 session 已经不存在，留着只会显示「已被移除」。
+     */
+    fun dismissLaundry(sessionId: String) {
+        laundryController.dismiss(sessionId)
+        if (_ui.value.washingSessionId == sessionId) closeWashing()
+    }
+
+    /**
+     * 拉一次当前状态页对应的订单。
+     *
+     * 失败只提示，不清空已有数据 —— 断网时页面仍然能按本地时间走完倒计时。
+     */
+    fun refreshWashing() {
+        val id = _ui.value.washingSessionId ?: return
+        if (_ui.value.washingRefreshing) return
+        _ui.update { it.copy(washingRefreshing = true) }
+        viewModelScope.launch {
+            val r = laundryController.refreshNow(id)
+            _ui.update { it.copy(washingRefreshing = false) }
+            when (r) {
+                is LaundryRefresh.Ok -> Unit
+                // 失效已经在统一出口处理（停轮询 + 置 EXPIRED），
+                // 状态页会切成「去重新登录」，这里只需要一句提示
+                is LaundryRefresh.AuthExpired -> note("胖乖登录已失效，请重新登录")
+                is LaundryRefresh.Failed -> note(r.message)
+            }
+        }
     }
 
     /**
@@ -1416,6 +1515,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         if (next.phone != current.phone || next.uid != current.uid) {
             sessionPrefs.save(platform, next.token, next.uid, next.phone)
         }
+        // 重新登录成功：把上次失效时停掉的洗衣轮询接回来，
+        // 否则得杀进程重开才会再查订单
+        if (platform == Platform.PANGGUAI) laundryController.resume()
     }
 
     /**
@@ -1432,6 +1534,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             billSyncJob?.cancel()
             billSyncJob = null
             sessionStore.clear()
+        } else {
+            // 失效后 token 已清空，轮询只会挂在 awaitToken 上空转 30 秒再重试
+            laundryController.stop()
         }
 
         _ui.update { state ->
@@ -1585,5 +1690,6 @@ private fun PgOrder.toBillRecord(): BillRecord = BillRecord(
     yuan = yuan,
     deviceName = deviceName,
     liters = liters,
-    secs = secs
+    secs = secs,
+    category = category
 )

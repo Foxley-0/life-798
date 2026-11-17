@@ -81,18 +81,34 @@ fun DeviceCard(
     ) {
         leading?.invoke()
 
+        /*
+         * 完成态换成琥珀色。
+         *
+         * 主题里**没有** warning 语义色（`Colors` 只有 error / tertiary 容器系列，
+         * 没有裸 `tertiary`），所以底色取 `tertiaryContainer`、图标取它的
+         * `onTertiaryContainer` —— 这一对是主题里唯一成对的琥珀系，深浅色都自带适配，
+         * 不用硬编码色值，也就不会在深色模式下糊掉。
+         */
+        val done = item.kind == DeviceKind.WASHER_DONE
+        val iconContainer = if (done) {
+            cs.tertiaryContainer
+        } else {
+            cs.primary.copy(alpha = if (item.running) 0.15f else 0.10f)
+        }
+        val iconTint = if (done) cs.onTertiaryContainer else cs.primary
+
         Box(
             modifier = Modifier
                 .size(38.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(cs.primary.copy(alpha = if (item.running) 0.15f else 0.10f)),
+                .background(iconContainer),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = iconOf(item.kind),
                 contentDescription = null,
                 modifier = Modifier.size(21.dp),
-                tint = cs.primary
+                tint = iconTint
             )
         }
 
@@ -158,6 +174,7 @@ private fun iconOf(kind: DeviceKind): ImageVector = when (kind) {
     DeviceKind.DRINK -> DeviceIcons.Drink
     DeviceKind.SHOWER -> DeviceIcons.Shower
     DeviceKind.WASHER -> DeviceIcons.Washer
+    DeviceKind.WASHER_DONE -> DeviceIcons.Warning
 }
 
 /**

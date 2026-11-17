@@ -4,6 +4,7 @@ import com.life798.mini.core.DeviceEntry
 import com.life798.mini.core.DevicePrefs
 import com.life798.mini.core.DeviceSession
 import com.life798.mini.core.Platform
+import com.life798.mini.core.laundry.LaundryPhase
 import com.life798.mini.core.laundry.LaundrySession
 import com.life798.mini.ui.water.PgWaterState
 import java.text.SimpleDateFormat
@@ -94,19 +95,47 @@ class DeviceSource(
             )
         }
 
-        pgLaundry.filter { it.running }.forEach { s ->
-            add(
-                DeviceCardItem(
-                    platform = Platform.PANGGUAI,
-                    // 点卡片要能重放扫码，所以优先用 NQT，而不是服务端 goodsId
-                    deviceId = s.nqt.ifBlank { s.deviceId },
-                    kind = DeviceKind.WASHER,
-                    title = title(Platform.PANGGUAI, s.deviceName, s.deviceId),
-                    // 洗衣机没有「已用时长」的通用口径，用剩余时间更有意义
-                    startedAt = s.startedAtMillis,
-                    at = s.startedAtMillis,
+        /*
+         * 洗衣：两种卡
+         *
+         * - `Starting / Running` → 原来的「正在使用」卡，原字段一个不改；
+         * - `Ended` → **原地换成「请取衣」卡**，标题固定、副行只放完成时间，
+         *   并且 `startedAt` 必须留空 —— 卡片只要拿到非空 startedAt 就会
+         *   强制把副行改成「正在使用 · 计时」，完成时间会被吃掉。
+         * - `Closed` 不出卡（和以前一样）：订单关闭不等于洗完，让它在状态页里处理。
+         *
+         * 会话本身仍然由 [com.life798.mini.ui.LaundryController] 保留，这里只是换个画法；
+         * 用户在状态页点「清除记录」把会话删掉之后，这条自然不再出现。
+         */
+        pgLaundry.forEach { s ->
+            when (s.phase) {
+                LaundryPhase.Ended -> add(
+                    DeviceCardItem(
+                        platform = Platform.PANGGUAI,
+                        // 点卡片要能回到状态页，所以仍然优先用 NQT
+                        deviceId = s.nqt.ifBlank { s.deviceId },
+                        kind = DeviceKind.WASHER_DONE,
+                        title = "洗衣已完成，请取衣",
+                        subtitle = finishedLabel(s),
+                        startedAt = null,
+                        at = s.finishedAtMillis ?: s.expectedEndMillis ?: s.startedAtMillis,
+                    )
                 )
-            )
+
+                LaundryPhase.Starting, LaundryPhase.Running -> add(
+                    DeviceCardItem(
+                        platform = Platform.PANGGUAI,
+                        deviceId = s.nqt.ifBlank { s.deviceId },
+                        kind = DeviceKind.WASHER,
+                        title = title(Platform.PANGGUAI, s.deviceName, s.deviceId),
+                        // 洗衣机没有「已用时长」的通用口径，用剩余时间更有意义
+                        startedAt = s.startedAtMillis,
+                        at = s.startedAtMillis,
+                    )
+                )
+
+                LaundryPhase.Closed -> Unit
+            }
         }
     }.sortedBy { it.startedAt ?: 0L }
 
@@ -174,3 +203,15 @@ class DeviceSource(
 /** 最近 7 天用的时间格式：`11-11 21:03`。 */
 internal fun visitTime(at: Long): String =
     SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(at))
+
+/**
+ * 洗衣完成卡副行：`18:32 完成`。
+ *
+ * 服务端给了实际完成时刻（`finishTime`）就用它；只有预计结束（`completeTime`）时
+ * 退一步用它 —— 总比不显示时间好。两个都没有（理论上不会）就只说「已完成」，
+ * 不要硬编一个当前时间冒充完成时刻。
+ */
+private fun finishedLabel(s: LaundrySession): String {
+    val at = s.finishedAtMillis ?: s.expectedEndMillis ?: return "已完成"
+    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(at)) + " 完成"
+}

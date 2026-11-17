@@ -24,20 +24,31 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.life798.mini.core.Platform
+import com.life798.mini.core.UsageConsent
+import com.life798.mini.core.UsageNotice
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -95,6 +106,14 @@ fun LoginScreen(
             runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
         }
     }
+
+    // —— 以下为使用须知所需的本地状态，与上面的登录表单没有任何数据往来 ——
+    val noticeContext = LocalContext.current
+    val noticeConsent = remember { UsageConsent(noticeContext) }
+    var showNotice by remember { mutableStateOf(false) }
+    // 初始值直接读偏好，不做异步加载：这一帧就要决定登录按钮是灰是亮，闪一下很难看。
+    // 从设置页「添加账号」进来的视为已同意 —— 首登时已经过了一遍，再拦一次纯属找茬。
+    var agreed by remember { mutableStateOf(noticeConsent.accepted || mode == LoginMode.ADD) }
 
     Column(
         modifier = Modifier
@@ -276,9 +295,51 @@ fun LoginScreen(
 
         Spacer(Modifier.height(20.dp))
 
+        // —— 使用须知勾选行 ——
+        // 只管登录按钮能不能点，不碰上面的手机号、图形码、获取验证码。
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Checkbox(
+                state = if (agreed) ToggleableState.On else ToggleableState.Off,
+                onClick = {
+                    // 没勾时点方框 = 去读全文（读到底才能勾）；已勾时点方框 = 取消并撤销记录，
+                    // 否则下次进来又自动勾上，等于没法反悔
+                    if (agreed) {
+                        agreed = false
+                        noticeConsent.revoke()
+                    } else {
+                        showNotice = true
+                    }
+                }
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = buildAnnotatedString {
+                    append("我已阅读并同意")
+                    withStyle(SpanStyle(color = MiuixTheme.colorScheme.primary)) {
+                        append("《${UsageNotice.TITLE}》")
+                    }
+                },
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { showNotice = true }
+                    .padding(vertical = 8.dp)
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+
         Button(
-            onClick = { onLogin(platform, form.phone, form.smsCode) },
-            enabled = !form.busy && configured,
+            onClick = {
+                // 按钮本身已经是灰的，这里再判一次，防同一帧内的连点漏过去
+                if (!agreed) showNotice = true else onLogin(platform, form.phone, form.smsCode)
+            },
+            enabled = !form.busy && configured && agreed,
             cornerRadius = 26.dp,
             colors = ButtonDefaults.buttonColorsPrimary(),
             modifier = Modifier
@@ -306,7 +367,22 @@ fun LoginScreen(
                 modifier = Modifier.fillMaxWidth()
             )
         }
+
+        // 底部只留白：同意入口统一在勾选行，别处不再重复出现《使用须知》链接
+        Spacer(Modifier.height(32.dp))
     }
+
+    UsageNoticeSheet(
+        show = showNotice,
+        onAgree = {
+            // 落盘失败就当没同意 —— 否则这次放行了，下次进来又被拦，用户会以为遇到 bug
+            if (noticeConsent.accept()) {
+                agreed = true
+                showNotice = false
+            }
+        },
+        onDismissRequest = { showNotice = false }
+    )
 }
 
 /**

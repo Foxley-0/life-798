@@ -1,5 +1,6 @@
 package com.life798.mini.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -24,8 +27,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +43,8 @@ import com.life798.mini.core.BillRecord
 import com.life798.mini.core.BillStore
 import com.life798.mini.core.BillTotals
 import com.life798.mini.core.Platform
+import com.life798.mini.core.SplitTotals
+import com.life798.mini.ui.devicecard.DeviceIcons
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
@@ -58,10 +65,13 @@ import java.time.YearMonth
 /** 一次读取的账单快照。 */
 private data class BillSnapshot(
     val bills: List<BillRecord>,
-    val monthTotals: BillTotals,
-    val yearTotals: BillTotals,
+    val monthSplit: SplitTotals,
+    val yearSplit: SplitTotals,
     val activeDays: Int,
-    val daily: Map<Int, Double>
+    /** 每天的饮水量，key 是「日」。 */
+    val dailyDrink: Map<Int, Double>,
+    /** 每天的淋浴量，key 是「日」。 */
+    val dailyShower: Map<Int, Double>
 )
 
 /**
@@ -145,10 +155,11 @@ fun UsageScreen(
     val snapshot = remember(store, year, month, revision) {
         BillSnapshot(
             bills = store.monthBills(year, month),
-            monthTotals = store.monthTotals(year, month),
-            yearTotals = store.yearTotals(year),
+            monthSplit = store.monthSplit(year, month),
+            yearSplit = store.yearSplit(year),
             activeDays = store.monthDays(year, month),
-            daily = store.monthDailyLiters(year, month)
+            dailyDrink = store.monthDailyLiters(year, month, BillRecord.CATEGORY_DRINK),
+            dailyShower = store.monthDailyLiters(year, month, BillRecord.CATEGORY_SHOWER)
         )
     }
 
@@ -231,8 +242,8 @@ fun UsageScreen(
                     UsageSummaryCard(
                         year = year,
                         month = month,
-                        monthTotals = snapshot.monthTotals,
-                        yearTotals = snapshot.yearTotals
+                        monthSplit = snapshot.monthSplit,
+                        yearSplit = snapshot.yearSplit
                     )
                 }
 
@@ -240,7 +251,8 @@ fun UsageScreen(
                     DailyChartCard(
                         year = year,
                         month = month,
-                        daily = snapshot.daily
+                        drink = snapshot.dailyDrink,
+                        shower = snapshot.dailyShower
                     )
                 }
 
@@ -332,74 +344,101 @@ private fun SyncErrorCard(message: String) {
     }
 }
 
-/** 双列汇总：所选月 / 所选年。升数在上，金额在下。 */
+/**
+ * 汇总：所选月 / 所选年，各一块。
+ *
+ * 每块都拆成饮水、淋浴两行 —— 两个平台、两种水的单价都不一样，
+ * 只给一个「24.65 升」看不出是接的水还是洗的澡。合计大字保留在最上面，
+ * 下面两行是拆分，加起来正好等于合计。
+ */
 @Composable
 private fun UsageSummaryCard(
     year: Int,
     month: Int,
-    monthTotals: BillTotals,
-    yearTotals: BillTotals
+    monthSplit: SplitTotals,
+    yearSplit: SplitTotals
 ) {
     Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            SummaryColumn(
-                label = "${month}月用水",
-                totals = monthTotals,
-                highlight = false,
-                modifier = Modifier.weight(1f)
-            )
-            SummaryColumn(
-                label = "${year}年用水",
-                totals = yearTotals,
-                highlight = true,
-                modifier = Modifier.weight(1f)
-            )
+        Column(Modifier.padding(20.dp)) {
+            SummaryBlock(label = "${month}月用水", split = monthSplit, highlight = false)
+            HorizontalDivider(Modifier.padding(vertical = 14.dp))
+            SummaryBlock(label = "${year}年用水", split = yearSplit, highlight = true)
         }
     }
 }
 
+/** 一块汇总：标题 + 合计（升/元）+ 两类拆分。 */
 @Composable
-private fun SummaryColumn(
-    label: String,
-    totals: BillTotals,
-    highlight: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier) {
-        Text(
-            text = label,
-            fontSize = 13.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+private fun SummaryBlock(label: String, split: SplitTotals, highlight: Boolean) {
+    val cs = MiuixTheme.colorScheme
+    Column {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = label,
+                modifier = Modifier.weight(1f),
+                fontSize = 13.sp,
+                color = cs.onSurfaceVariantSummary
+            )
+            Text(
+                text = "${liters(split.all.liters)} 升",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (highlight) cs.primary else cs.onSurface
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = yuan(split.all.yuan),
+                fontSize = 12.sp,
+                color = cs.onSurfaceVariantSummary
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        SplitLine(name = "饮水", totals = split.drink, dot = MiuixTheme.colorScheme.primary)
+        Spacer(Modifier.height(5.dp))
+        SplitLine(name = "淋浴", totals = split.shower, dot = showerAccent())
+    }
+}
+
+/** 一类用水的单行：色点 + 名称 + 升数 + 金额。 */
+@Composable
+private fun SplitLine(name: String, totals: BillTotals, dot: Color) {
+    val cs = MiuixTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(dot)
         )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "${liters(totals.liters)} 升",
-            fontSize = 26.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = if (highlight) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface
-        )
-        Spacer(Modifier.height(3.dp))
-        Text(
-            text = yuan(totals.yuan),
-            fontSize = 12.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-        )
+        Spacer(Modifier.width(6.dp))
+        Text(text = name, fontSize = 12.sp, color = cs.onSurfaceSecondary)
+        Spacer(Modifier.width(10.dp))
+        Text(text = "${liters(totals.liters)} 升", fontSize = 12.sp, color = cs.onSurface)
+        Spacer(Modifier.width(6.dp))
+        Text(text = yuan(totals.yuan), fontSize = 12.sp, color = cs.onSurfaceVariantSummary)
     }
 }
 
 /** 每日用水折线。标题由 [DailyUsageChart] 自带，这里只负责卡片外壳和内边距。 */
 @Composable
-private fun DailyChartCard(year: Int, month: Int, daily: Map<Int, Double>) {
-    val points = remember(year, month, daily) {
+private fun DailyChartCard(
+    year: Int,
+    month: Int,
+    drink: Map<Int, Double>,
+    shower: Map<Int, Double>
+) {
+    val days = remember(year, month) {
         val cursor = YearMonth.of(year, month)
         val today = LocalDate.now()
         val lastDay = if (cursor == YearMonth.from(today)) today.dayOfMonth else cursor.lengthOfMonth()
-        (1..lastDay).map { day -> UsagePoint(day, daily[day] ?: 0.0) }
+        (1..lastDay).toList()
     }
+    val drinkPoints = remember(days, drink) { days.map { UsagePoint(it, drink[it] ?: 0.0) } }
+    val showerPoints = remember(days, shower) { days.map { UsagePoint(it, shower[it] ?: 0.0) } }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp)) {
-            DailyUsageChart(points = points)
+            DailyUsageChart(drink = drinkPoints, shower = showerPoints)
         }
     }
 }
@@ -445,10 +484,33 @@ private fun DayGroup(date: LocalDate, bills: List<BillRecord>) {
  */
 @Composable
 private fun BillRow(bill: BillRecord) {
+    val cs = MiuixTheme.colorScheme
+    // 类型码缺失 = 服务端已经清掉这笔，查不回来了。这时不猜类型，画个灰块说明「不知道」，
+    // 而不是硬塞一个水滴——猜错比说不出来更糟。
+    val known = bill.category == BillRecord.CATEGORY_DRINK ||
+        bill.category == BillRecord.CATEGORY_SHOWER
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(
+                    if (known) cs.primary.copy(alpha = 0.10f)
+                    else cs.onSurfaceVariantSummary.copy(alpha = 0.08f)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = billIcon(bill.category),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = if (known) cs.primary else cs.onSurfaceVariantSummary
+            )
+        }
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 text = bill.deviceName ?: "接水",
@@ -483,6 +545,17 @@ private fun BillRow(bill: BillRecord) {
             )
         }
     }
+}
+
+/**
+ * 类型码 → 图标。
+ *
+ * 码是服务端 `tradeOrderItem[0].goodsCategory` 原样存下来的：`04` 饮水、`08` 淋浴。
+ * 读不出码的情况已经被 [BillRecord] 解析时兜底过，这里只剩极端脏数据。
+ */
+private fun billIcon(category: String?): ImageVector = when (category) {
+    BillRecord.CATEGORY_SHOWER -> DeviceIcons.Shower
+    else -> DeviceIcons.Drink
 }
 
 /** 空状态：所选月份没有账单。 */

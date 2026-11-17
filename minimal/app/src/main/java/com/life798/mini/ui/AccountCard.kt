@@ -53,12 +53,20 @@ fun AccountCard(
             Spacer(Modifier.height(4.dp))
             Text(
                 text = when {
-                    account.phone.isNotBlank() -> maskPhone(account.phone)
+                    // 失效时 phone 仍然保留（重登要预填），所以这两条必须排在号码前面，
+                    // 否则副标题只会显示手机号，用户看不出这个账号已经不能用了。
+                    account.state == SessionState.EXPIRED && account.phone.isNotBlank() ->
+                        "${maskPhone(account.phone)} · 登录已失效"
                     account.state == SessionState.EXPIRED -> "登录已失效"
+                    account.phone.isNotBlank() -> maskPhone(account.phone)
                     else -> "未登录"
                 },
                 fontSize = 13.sp,
-                color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                color = if (account.state == SessionState.EXPIRED) {
+                    MiuixTheme.colorScheme.error
+                } else {
+                    MiuixTheme.colorScheme.onSurfaceSecondary
+                },
             )
         }
 

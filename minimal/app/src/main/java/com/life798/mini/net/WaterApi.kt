@@ -239,7 +239,9 @@ class WaterApi(
                             yuan = payment,
                             deviceName = deviceNameFromMsg(item.optString("msg")),
                             liters = null,
-                            secs = null
+                            secs = null,
+                            // 惠生活798 全部是淋浴/热水龙头，类型没有第二种可能
+                            category = BillRecord.CATEGORY_SHOWER
                         )
                     )
                 }
@@ -276,7 +278,8 @@ class WaterApi(
                 deviceName = dev?.optString("name")?.takeIf { it.isNotBlank() }
                     ?: deviceNameFromMsg(bill.optString("msg")),
                 liters = liters,
-                secs = secs
+                secs = secs,
+                category = BillRecord.CATEGORY_SHOWER
             )
         }
     }

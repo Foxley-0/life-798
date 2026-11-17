@@ -28,6 +28,14 @@ data class PgOrder(
     val liters: Double?,
     /** 本次用水时长（秒），由开始/结束时间算出来。 */
     val secs: Double?,
+    /**
+     * 设备类型码，服务端原样给的 `tradeOrderItem[0].goodsCategory`。
+     *
+     * `"04"` 饮水、`"08"` 淋浴、`"00"` 洗衣。**这是唯一可靠的类型来源** ——
+     * `machineFunctionName` 在淋浴单上返回的是 `"01"`（程序编号，不是名字），
+     * `machineName` 是 `40410` 这种纯编号，都不带类型语义。
+     */
+    val category: String? = null,
 )
 
 /**
@@ -51,8 +59,17 @@ class PangguaiOrderApi(context: Context) {
      *
      * `orderStatus` 传空串表示不限，只保留已完成的订单 —— 退款/进行中的单
      * 水量和金额都不该记进账本。
+     *
+     * [displayTag] 是服务端的分类筛选：`003` 饮水、`004` 淋浴、`001` 洗衣。
+     * 官方 App 的账单页就是按这个参数一次拉一类，不传时服务端的行为没有保证，
+     * 所以账本只按需要的那两类显式拉取，不靠默认值。
      */
-    suspend fun page(token: String, page: Int, size: Int = PAGE_SIZE): ApiResult<List<PgOrder>> =
+    suspend fun page(
+        token: String,
+        page: Int,
+        displayTag: String,
+        size: Int = PAGE_SIZE,
+    ): ApiResult<List<PgOrder>> =
         when (
             val r = api.callBusiness(
                 PATH_LIST,
@@ -60,6 +77,7 @@ class PangguaiOrderApi(context: Context) {
                     "page" to page.toString(),
                     "pageSize" to size.toString(),
                     "orderStatus" to "",
+                    "displayTag" to displayTag,
                     "token" to token
                 ),
                 token
@@ -73,7 +91,7 @@ class PangguaiOrderApi(context: Context) {
                         toOrder(item)?.let { add(it) }
                     }
                 }
-                AppLog.i("PgOrder", "第 $page 页 ${orders.size} 条")
+                AppLog.i("PgOrder", "tag=$displayTag 第 $page 页 ${orders.size} 条")
                 ApiResult.Ok(orders)
             }
 
@@ -114,7 +132,8 @@ class PangguaiOrderApi(context: Context) {
                             secs = secondsBetween(
                                 data.optString("beginTime"),
                                 data.optString("finishTime")
-                            )
+                            ),
+                            category = categoryOf(data)
                         )
                     )
                 }
@@ -137,8 +156,25 @@ class PangguaiOrderApi(context: Context) {
             yuan = yuan,
             deviceName = item.optString("machineName").takeIf { it.isNotBlank() },
             liters = null,
-            secs = null
+            secs = null,
+            category = categoryOf(item)
         )
+    }
+
+    /**
+     * 设备类型码：`tradeOrderItem[0].goodsCategory`。
+     *
+     * 只认第一个 tradeOrderItem —— 一笔订单只有一个设备，数组里是同一台机器的
+     * 分项，取哪个都一样。取不到就返回 null，交给界面走「类型未知」兜底，
+     * 不拿设备名去猜（`静4-4热` 是饮水、`40410` 是淋浴，猜不出来）。
+     */
+    private fun categoryOf(item: JSONObject): String? {
+        val arr = item.optJSONArray("tradeOrderItem") ?: return null
+        for (i in 0 until arr.length()) {
+            val code = arr.optJSONObject(i)?.optString("goodsCategory").orEmpty()
+            if (code.isNotBlank()) return code
+        }
+        return null
     }
 
     /** `2026-11-11 10:47:39` 是北京时间，按东八区换算，不用设备时区。 */
@@ -159,6 +195,13 @@ class PangguaiOrderApi(context: Context) {
 
     companion object {
         const val PAGE_SIZE = 40
+
+        /** 账本要拉的分类：饮水。抓包实证 `displayTag=003` → `goodsCategory=04`。 */
+        const val TAG_DRINK = "003"
+
+        /** 账本要拉的分类：淋浴。抓包实证 `displayTag=004` → `goodsCategory=08`。 */
+        const val TAG_SHOWER = "004"
+
         private const val PATH_LIST = "/order/list"
         private const val PATH_DETAIL = "/order/detail"
         private const val STATUS_DONE = 2

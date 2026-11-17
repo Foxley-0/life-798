@@ -54,6 +54,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.life798.mini.core.AppLog
 import com.life798.mini.core.Platform
+import com.life798.mini.core.laundry.LaundryPhase
 import com.life798.mini.core.water.PgWaterPhase
 import com.life798.mini.ui.devicecard.DeviceKind
 import com.life798.mini.scan.QrParser
@@ -67,6 +68,7 @@ import com.life798.mini.ui.ReferencesScreen
 import com.life798.mini.ui.AppViewModel
 import com.life798.mini.ui.AppearanceScreen
 import com.life798.mini.ui.LoginScreen
+import com.life798.mini.ui.PangguaiWashingScreen
 import com.life798.mini.ui.LoginMode
 import com.life798.mini.ui.MainTabsPagerState
 import com.life798.mini.ui.MiniTheme
@@ -125,7 +127,7 @@ private const val PAGE_COUNT = 3
  *
  * 返回键只做一件事：出栈。所有页面都不再自己挂 BackHandler。
  */
-private enum class Route { TABS, START, USING, ABOUT, THEME, REFERENCES, ADD_ACCOUNT, PANGGUAI_START, PANGGUAI_WATER_START, PANGGUAI_WATER_USING }
+private enum class Route { TABS, START, USING, ABOUT, THEME, REFERENCES, ADD_ACCOUNT, PANGGUAI_START, PANGGUAI_WASHING, PANGGUAI_WATER_START, PANGGUAI_WATER_USING }
 
 private val RouteStackSaver = listSaver<List<String>, String>(
     save = { it },
@@ -379,6 +381,8 @@ private fun MiniApp(
         if (top == Route.START.name) vm.clearDevice()
         // 胖乖启动页同理：返回后不留上一台设备的信息
         if (top == Route.PANGGUAI_START.name) vm.clearPangguaiWasher()
+        // 离开洗衣状态页只关页面，运行态会话留给轮询继续核对
+        if (top == Route.PANGGUAI_WASHING.name) vm.closeWashing()
         // 离开胖乖用水启动页：清掉预检，但不影响已启动的运行态会话
         if (top == Route.PANGGUAI_WATER_START.name) waterVm.dismiss()
         return true
@@ -658,6 +662,20 @@ private fun MainContent(
                 onAlipayResult = vm::onAlipayReturned
             )
 
+            // 洗衣运行态：只读本地会话 + 手动刷新，不做下单入口
+            Route.PANGGUAI_WASHING.name -> PangguaiWashingScreen(
+                session = state.laundrySessions.firstOrNull {
+                    it.sessionId == state.washingSessionId
+                },
+                refreshing = state.washingRefreshing,
+                onBack = onBack,
+                onRefresh = vm::refreshWashing,
+                // 清完这条会话，首页那张「洗衣已完成，请取衣」卡就不会再出现
+                onDismiss = {
+                    state.washingSessionId?.let(vm::dismissLaundry)
+                }
+            )
+
             Route.USING.name -> UsingScreen(
                 view = state.toWaterUi(),
                 onBack = onBack,
@@ -743,6 +761,12 @@ private fun MainContent(
                                     }
                                 },
                                 bottomInset = bottomInset,
+                                // 提示条上的「去登录」：和设置页走同一条路 ——
+                                // 先锁平台再进添加账号页，登录成功自动退回，不会把 tab 栈冲掉
+                                onFixAccount = { platform ->
+                                    vm.beginAddAccount(platform)
+                                    onPush(Route.ADD_ACCOUNT)
+                                },
                                 // 扫的还是正在出水的那台设备 → 直接回用水页，
                                 // 别让用户对着一个「启动」按钮再点一次
                                 onScanned = {
@@ -773,12 +797,25 @@ private fun MainContent(
                                 // 三条链路各走各的，卡片本身不知道洗衣和淋浴有什么区别。
                                 onOpenDevice = { item ->
                                     when {
-                                        // 胖乖洗衣：NQT 码交给 ViewModel 重放扫码流程，
-                                        // 不记流水（不是真的扫过）
+                                        // 胖乖洗衣：本地挂着这台设备的会话就直接进状态页，
+                                        // 一个请求都不发。**两种状态都算** —— 还在洗（WASHER）
+                                        // 和洗完等取衣（WASHER_DONE）进的是同一页，只是页面里
+                                        // 有没有「清除记录」按钮不同。找不到会话才重放扫码去启动。
                                         item.platform == Platform.PANGGUAI &&
-                                            item.kind == DeviceKind.WASHER -> {
-                                            vm.onQrDecoded(item.deviceId, record = false)
-                                            onPush(Route.PANGGUAI_START)
+                                            (item.kind == DeviceKind.WASHER ||
+                                                item.kind == DeviceKind.WASHER_DONE) -> {
+                                            val live = state.laundrySessions.firstOrNull {
+                                                (it.running || it.phase == LaundryPhase.Ended) &&
+                                                    (it.nqt == item.deviceId ||
+                                                        it.deviceId == item.deviceId)
+                                            }
+                                            if (live != null) {
+                                                vm.openWashing(live.sessionId)
+                                                onPush(Route.PANGGUAI_WASHING)
+                                            } else {
+                                                vm.onQrDecoded(item.deviceId, record = false)
+                                                onPush(Route.PANGGUAI_START)
+                                            }
                                         }
                                         // 胖乖饮水 / 淋浴：交给独立的用水 ViewModel
                                         item.platform == Platform.PANGGUAI -> {
