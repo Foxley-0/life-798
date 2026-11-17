@@ -78,9 +78,9 @@ fun UpdateDialog(
 
             // 一条说明都没有（老 release 的正文是固定模板）时整块隐藏，
             // 不留一个空框
-            if (notes.isNotEmpty()) {
+            if (notes.headline != null || notes.items.isNotEmpty()) {
                 Spacer(Modifier.height(16.dp))
-                NotesBox(notes)
+                NotesBox(headline = notes.headline, items = notes.items)
             }
 
             Spacer(Modifier.height(22.dp))
@@ -177,15 +177,16 @@ private fun TitleRow(from: String, to: String) {
  * 右边距 5dp + 条宽仍在 16dp 内边距之内，正文不会被压住。
  */
 @Composable
-private fun NotesBox(notes: List<String>) {
+private fun NotesBox(headline: String?, items: List<String>) {
     val scrollState = rememberScrollState()
+    val cs = MiuixTheme.colorScheme
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = 240.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(MiuixTheme.colorScheme.surfaceContainer)
+            .background(cs.surfaceContainer)
     ) {
         Column(
             modifier = Modifier
@@ -195,21 +196,33 @@ private fun NotesBox(notes: List<String>) {
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            notes.forEach { note ->
+            // 摘要行：正文第一行 `🎉…🎉`。这是整篇唯一的「一句话结论」，
+            // 单独一行、加粗、主色，前面不带圆点 —— 它和下面的条目不是同级。
+            if (headline != null) {
+                Text(
+                    text = headline,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = cs.primary,
+                )
+            }
+
+            items.forEach { note ->
                 Row {
                     Box(
                         modifier = Modifier
                             .padding(top = 7.dp)
                             .size(3.dp)
                             .clip(CircleShape)
-                            .background(MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            .background(cs.onSurfaceVariantSummary)
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = note,
                         fontSize = 13.sp,
                         lineHeight = 21.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        color = cs.onSurfaceVariantSummary,
                     )
                 }
             }
@@ -230,25 +243,42 @@ private fun NotesBox(notes: List<String>) {
 private val BULLET_PREFIXES = listOf("- ", "* ", "• ")
 private val ORDERED_PREFIX = Regex("""^\d+[.、)]\s*""")
 
+/** 摘要行：整行被一对 🎉 包住，`🎉饮水淋浴分开算🎉`。 */
+private val HEADLINE = Regex("""^🎉.*🎉$""")
+
+/** 弹窗里要显示的两块：一句摘要 + 若干条目。 */
+private data class UpdateNotes(val headline: String?, val items: List<String>)
+
 /**
- * 从 release 正文里抽出变更条目。
+ * 从 release 正文里抽出摘要行和变更条目。
  *
- * 只认列表行首：`- ` / `* ` / `• ` / `1. `。其余（标题、空行、分隔线、
- * 正文段落）一律跳过 —— 宁可少显示，也不要把一整段功能清单塞进弹窗。
+ * **摘要行**取正文里第一个 `🎉…🎉` 整行 —— 那是每次发版手写的「一句话结论」，
+ * 单独渲染在条目上方。之前这里只认列表行，摘要和开头段落全被丢掉，
+ * 结果弹窗里只剩一堆条目，看不出这版到底干了什么。
+ *
+ * **条目**只认列表行首：`- ` / `* ` / `• ` / `1. `。标题（`#`）、分隔线、
+ * 正文段落一律跳过 —— 宁可少显示，也不要把一整段功能清单塞进弹窗。
  *
  * 条数不设上限，多了靠滚动。
  */
-private fun parseUpdateNotes(body: String): List<String> {
-    if (body.isBlank()) return emptyList()
+private fun parseUpdateNotes(body: String): UpdateNotes {
+    if (body.isBlank()) return UpdateNotes(null, emptyList())
 
-    val out = mutableListOf<String>()
+    var headline: String? = null
+    val items = mutableListOf<String>()
     body.lineSequence().forEach { raw ->
         val line = raw.trim()
 
+        // 增量标记：去掉 `**` 和反引号后才是给人看的字
         val stripped = when {
             BULLET_PREFIXES.any { line.startsWith(it) } -> line.substring(2)
             ORDERED_PREFIX.containsMatchIn(line) -> ORDERED_PREFIX.replace(line, "")
-            else -> return@forEach
+            else -> {
+                // 摘要行只取第一个；`## 小节标题` 之类不参与
+                val plain = line.replace("**", "").replace("`", "").trim()
+                if (headline == null && HEADLINE.matches(plain)) headline = plain
+                return@forEach
+            }
         }
 
         val text = stripped
@@ -256,7 +286,7 @@ private fun parseUpdateNotes(body: String): List<String> {
             .replace("`", "")
             .trim()
 
-        if (text.isNotEmpty()) out += text
+        if (text.isNotEmpty()) items += text
     }
-    return out
+    return UpdateNotes(headline, items)
 }
