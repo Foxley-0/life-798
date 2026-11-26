@@ -119,6 +119,10 @@ fun ScanScreen(
     pgLaundry: List<LaundrySession> = emptyList(),
     /** 点任意一张设备卡：去哪一页由调用方按平台 + 类型决定 */
     onOpenDevice: (DeviceCardItem) -> Unit = {},
+    /** 点待取件横幅：进洗衣状态页（多台时是最近完成的那台） */
+    onOpenPickup: (LaundrySession) -> Unit = {},
+    /** 点「已取衣 / 全部标记已取衣」：只清本地完成记录，不碰服务端订单 */
+    onDismissPickup: () -> Unit = {},
     /** 底栏占掉的高度。设备列表底部要避开它，否则最后一项会被胶囊压住 */
     bottomInset: Dp = 0.dp,
     /** 点重要提示条上的「去登录」：由调用方决定去添加账号页还是先切平台 */
@@ -175,6 +179,10 @@ fun ScanScreen(
     val activeDevices = remember(state.session, pgWater, pgLaundry, favorites) {
         source.active(state.session, pgWater, pgLaundry)
     }
+
+    // 洗完了要取衣：它是一件待办，不是「正在使用的设备」，所以独立成一条横幅，
+    // 不进主卡、也不参与「谁在用」的排序。24 小时外的自动不显示。
+    val pickup = pendingPickup(pgLaundry)
 
     var renaming by remember { mutableStateOf<DeviceCardItem?>(null) }
 
@@ -465,6 +473,18 @@ fun ScanScreen(
                     onOpenRecent = { showRecent = true },
                     onOpenDevice = onOpenDevice
                 )
+
+                // 待取件横幅：夹在主卡和设备区之间。它不占主卡的高度，
+                // 所以洗衣完成再多，扫码按钮也不会被挤掉。
+                if (pickup.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    PickupBanner(
+                        sessions = pickup,
+                        onOpen = onOpenPickup,
+                        onDismissAll = onDismissPickup,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                }
 
                 DeviceSection(
                     favorites = favorites,

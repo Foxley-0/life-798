@@ -63,6 +63,11 @@ data class BillRecord(
 /** 一段时间的合计。升数和金额分开累加，因为升数可能还没补全。 */
 data class BillTotals(val liters: Double, val yuan: Double)
 
+/** 一次导入的结果：新增多少条、已有多少条（已存在的只补字段，不重复计数）。 */
+data class BillImportCount(val added: Int, val existed: Int) {
+    val total: Int get() = added + existed
+}
+
 /**
  * 按用水类型拆开的合计：饮水、淋浴各一份。
  *
@@ -118,6 +123,13 @@ class BillStore(
      */
     private val syncDayKey get() = "${platform.prefix}lastSync_$owner"
 
+    /**
+     * 上次同步失败的时刻（毫秒），0 / 不存在表示没失败过。
+     *
+     * 和 [syncDayKey] 一样带平台前缀、不带 `bills_`，不会被遗留 key 清理逻辑误伤。
+     */
+    private val failAtKey get() = "${platform.prefix}lastFail_$owner"
+
     /** 没登录就没有账本 —— 防止登出后还读到上一个账号的数据。 */
     private val enabled: Boolean get() = owner.isNotBlank()
 
@@ -125,23 +137,37 @@ class BillStore(
     @Synchronized
     fun all(): List<BillRecord> = read().sortedByDescending { it.at }
 
+    /** 本地已有的全部 id。增量同步用它判断「这一页是不是全是老单」。 */
+    @Synchronized
+    fun existingIds(): Set<String> = read().mapTo(HashSet()) { it.id }
+
     /**
      * 合并服务端返回的一页账单。
      *
      * @return 本次新增的条数（已存在的 id 只更新，不算新增）
      */
+    fun merge(incoming: List<BillRecord>): Int = mergeReport(incoming).size
+
+    /**
+     * 合并并返回**新增的 id**。
+     *
+     * 同步流程要区分「这轮新出现的账单」和「历史缺口」：新增的必须当场补详情，
+     * 历史缺口只按预算补。只返回条数分不出这两拨，所以这里把 id 带出来。
+     *
+     * @return 新增账单的 id（已存在的 id 只更新，不返回）
+     */
     @Synchronized
-    fun merge(incoming: List<BillRecord>): Int {
-        if (!enabled || incoming.isEmpty()) return 0
+    fun mergeReport(incoming: List<BillRecord>): List<String> {
+        if (!enabled || incoming.isEmpty()) return emptyList()
         val current = read().associateBy { it.id }.toMutableMap()
-        var added = 0
+        val added = ArrayList<String>()
         incoming.forEach { bill ->
             // 0 元 = 没出水的空账单，不入库
             if (bill.yuan <= 0.0) return@forEach
             val old = current[bill.id]
             if (old == null) {
                 current[bill.id] = bill
-                added++
+                added += bill.id
             } else {
                 // 服务端版本优先，但要保住已经补到的升数（列表不带升数，别把详情冲掉）
                 current[bill.id] = bill.copy(
@@ -157,6 +183,54 @@ class BillStore(
         }
         write(current.values.toList())
         return added
+    }
+
+    // ---------------- 导出 / 导入 ----------------
+
+    /**
+     * 账本的原始镜像（不排序、不截断），导出用。
+     *
+     * 用 [read] 而不是 [all]：导出要的是盘上那份原样数据，顺序和条数都别动 ——
+     * 排序交给导入方，截断则由 [write] 在写回时决定。
+     */
+    @Synchronized
+    fun snapshot(): List<BillRecord> = read()
+
+    /**
+     * 从另一个账本文件导入。
+     *
+     * 合并规则和 [mergeReport] 一致：按 `id` 去重，已有的**只补空缺字段**，
+     * 本地已有的升数、分类不会被导入文件里的空值冲掉；0 元空账单不入库。
+     *
+     * 区别只在于它是给"用户主动导入"用的，需要把「新增」和「已存在」分开报给界面。
+     */
+    @Synchronized
+    fun importRecords(records: List<BillRecord>): BillImportCount {
+        if (!enabled || records.isEmpty()) return BillImportCount(0, 0)
+        val current = read().associateBy { it.id }.toMutableMap()
+        var added = 0
+        var existed = 0
+        records.forEach { bill ->
+            if (bill.yuan <= 0.0) return@forEach
+            val old = current[bill.id]
+            if (old == null) {
+                current[bill.id] = bill
+                added++
+            } else {
+                existed++
+                current[bill.id] = old.copy(
+                    // 本地优先：导入文件来自另一台设备，不能把本机补到的升数/分类覆盖成 null
+                    liters = old.liters ?: bill.liters,
+                    secs = old.secs ?: bill.secs,
+                    deviceName = old.deviceName ?: bill.deviceName,
+                    category = old.category ?: bill.category,
+                    dead = old.dead
+                )
+            }
+        }
+        if (added > 0) write(current.values.toList())
+        AppLog.i("Bill", "导入账本：新增 $added 条，已存在 $existed 条")
+        return BillImportCount(added, existed)
     }
 
     // ---------------- 每日同步节流 ----------------
@@ -182,8 +256,40 @@ class BillStore(
      */
     fun markSyncedToday() {
         if (!enabled) return
-        sp.edit().putString(syncDayKey, LocalDate.now().toString()).apply()
+        // 成功就把失败戳清掉：退避只针对「刚失败过」的那段时间
+        sp.edit()
+            .putString(syncDayKey, LocalDate.now().toString())
+            .remove(failAtKey)
+            .apply()
     }
+
+    /** 记一次失败的时刻，用于 [inBackoff]。 */
+    fun markSyncFailed() {
+        if (!enabled) return
+        sp.edit().putLong(failAtKey, System.currentTimeMillis()).apply()
+    }
+
+    /**
+     * 这轮同步是不是刚失败过（[BACKOFF_MS] 之内）。
+     *
+     * 鉴权失效、服务端 5xx、断网都会走到失败分支。不记时间的话，用户每切进
+     * 用量页都会重打一遍服务端 —— 而网络层面的原因通常几分钟内自己就好了，
+     * 重试得太勤只是白耗流量和电。手动下拉不受这个限制。
+     */
+    fun inBackoff(): Boolean {
+        if (!enabled) return false
+        val at = sp.getLong(failAtKey, 0L)
+        if (at <= 0L) return false
+        return System.currentTimeMillis() - at < BACKOFF_MS
+    }
+
+    /**
+     * 进用量页时该不该自动同步。
+     *
+     * 三条都要满足：今天还没同步过、不在失败退避期、有账号。
+     * 跨过零点 `syncedToday()` 自然变 false，第二天第一次进来就会再拉一遍。
+     */
+    fun shouldAutoSync(): Boolean = enabled && !syncedToday() && !inBackoff()
 
     /**
      * 还没拿到升数的账单 id，用于逐条补详情。
@@ -246,7 +352,10 @@ class BillStore(
                 liters = record.liters ?: old.liters,
                 secs = record.secs ?: old.secs,
                 deviceName = record.deviceName ?: old.deviceName,
-                dead = record.dead || old.dead
+                dead = record.dead || old.dead,
+                // 胖乖的详情带类型码，顺手补齐列表阶段没拿到的那几条老单；
+                // 详情不带时保住本地已有的，不能抹成 null
+                category = record.category ?: old.category
             )
             updated++
         }
@@ -348,55 +457,26 @@ class BillStore(
     // ---------------- 内部 ----------------
 
     private fun read(): List<BillRecord> =
-        if (!enabled) emptyList() else parse(sp.getString(key, null))
+        if (!enabled) emptyList() else parseJson(sp.getString(key, null))
 
-    /** 把一段落盘 JSON 解成账单列表。数据损坏就当空账本，宁可少显示也不要让页面崩。 */
-    private fun parse(raw: String?): List<BillRecord> {
-        if (raw.isNullOrBlank()) return emptyList()
-        return runCatching {
-            val array = JSONArray(raw)
-            buildList {
-                for (i in 0 until array.length()) {
-                    val item = array.optJSONObject(i) ?: continue
-                    val id = item.optString("id")
-                    val at = item.optLong("at", 0L)
-                    if (id.isBlank() || at <= 0L) continue
-                    val name = item.optString("n").takeIf { it.isNotBlank() }
-                    add(
-                        BillRecord(
-                            id = id,
-                            at = at,
-                            yuan = item.optDouble("y", 0.0),
-                            deviceName = name,
-                            liters = if (item.has("l")) item.optDouble("l") else null,
-                            secs = if (item.has("s")) item.optDouble("s") else null,
-                            dead = item.optBoolean("d", false),
-                            category = item.optString("c").takeIf { it.isNotBlank() }
-                                ?: guessCategory(name)
-                        )
-                    )
-                }
-            }
-        }.getOrDefault(emptyList())
+    private fun write(bills: Collection<BillRecord>) {
+        if (!enabled) return
+        // 超出上限丢最旧的，防止 JSON 无限膨胀。
+        // 账单是用户唯一的历史，被丢掉就再也拉不回来（服务端会过期），
+        // 所以截断必须留个记录，出问题时能查到是什么时候开始丢的。
+        val sorted = bills.sortedByDescending { it.at }
+        if (sorted.size > MAX_BILLS) {
+            AppLog.w("Bill", "账本超过 $MAX_BILLS 条，丢弃最旧的 ${sorted.size - MAX_BILLS} 条")
+        }
+        val trimmed = sorted.take(MAX_BILLS)
+        val array = JSONArray()
+        trimmed.forEach { bill -> array.put(encodeBill(bill)) }
+        // 账单是用户唯一的历史记录，用 commit 同步落盘，进程被杀也不丢
+        sp.edit().putString(key, array.toString()).commit()
     }
 
-    /**
-     * 老账本没有类型码时的兜底。
-     *
-     * 加 `category` 之前的记录只有设备名，实测设备上两本账本的形状是：
-     * - 798：「雅3——1洗热间—热水龙头5」「雅3——1洗热间—淋浴6」→ 淋浴
-     * - 胖乖：「雅3-1热」「雅3-1冷」「静4-4热」→ 饮水机的热/冷水口
-     *
-     * 所以只认「淋浴 / 热水龙头 / 洗热」这几个明确指向淋浴的字样，其余按饮水。
-     * 这是启发式、不是权威：新账单都自带服务端的 `goodsCategory`，根本走不到这里；
-     * 只有「加字段之前就已存在、且服务端已清账查不回来」的那几条才用得上，
-     * 判错了也不会覆盖任何权威数据。
-     */
-    private fun guessCategory(name: String?): String {
-        val n = name.orEmpty()
-        val shower = n.contains("淋浴") || n.contains("热水龙头") || n.contains("洗热")
-        return if (shower) BillRecord.CATEGORY_SHOWER else BillRecord.CATEGORY_DRINK
-    }
+    private fun Long.toLocalDate(): LocalDate =
+        Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()).toLocalDate()
 
     /**
      * 把「老板本按 uid 存的账本」合并进当前手机号的账本。
@@ -424,25 +504,55 @@ class BillStore(
         var merged = 0
         stale.forEach { k ->
             // merge 会写盘并保住已有升数；空数据也照样把 key 清掉
-            merged += merge(parse(sp.getString(k, null)))
+            merged += merge(parseJson(sp.getString(k, null)))
         }
         sp.edit().also { editor -> stale.forEach { editor.remove(it) } }.apply()
         AppLog.i("Bill", "迁移遗留账本 ${stale.size} 个 key（$stale），合并进来 $merged 条")
         return merged
     }
 
-    private fun write(bills: Collection<BillRecord>) {
-        if (!enabled) return
-        // 超出上限丢最旧的，防止 JSON 无限膨胀。
-        // 账单是用户唯一的历史，被丢掉就再也拉不回来（服务端会过期），
-        // 所以截断必须留个记录，出问题时能查到是什么时候开始丢的。
-        val sorted = bills.sortedByDescending { it.at }
-        if (sorted.size > MAX_BILLS) {
-            AppLog.w("Bill", "账本超过 $MAX_BILLS 条，丢弃最旧的 ${sorted.size - MAX_BILLS} 条")
+    companion object {
+        // ---------------- JSON 形状（账本读写与导出文件共用） ----------------
+
+        /**
+         * 把一段落盘 JSON 解成账单列表。
+         *
+         * 账本读取和「导入账单文件」走同一个函数 —— 导出文件里的 `bills` 数组
+         * 就是落盘格式，不另造一套字段，也就不会出现「导出的能读、盘上的读不了」。
+         *
+         * 数据损坏就当空账本，宁可少显示也不要让页面崩。
+         */
+        internal fun parseJson(raw: String?): List<BillRecord> {
+            if (raw.isNullOrBlank()) return emptyList()
+            return runCatching {
+                val array = JSONArray(raw)
+                buildList {
+                    for (i in 0 until array.length()) {
+                        val item = array.optJSONObject(i) ?: continue
+                        val id = item.optString("id")
+                        val at = item.optLong("at", 0L)
+                        if (id.isBlank() || at <= 0L) continue
+                        val name = item.optString("n").takeIf { it.isNotBlank() }
+                        add(
+                            BillRecord(
+                                id = id,
+                                at = at,
+                                yuan = item.optDouble("y", 0.0),
+                                deviceName = name,
+                                liters = if (item.has("l")) item.optDouble("l") else null,
+                                secs = if (item.has("s")) item.optDouble("s") else null,
+                                dead = item.optBoolean("d", false),
+                                category = item.optString("c").takeIf { it.isNotBlank() }
+                                    ?: guessCategory(name)
+                            )
+                        )
+                    }
+                }
+            }.getOrDefault(emptyList())
         }
-        val trimmed = sorted.take(MAX_BILLS)
-        val array = JSONArray()
-        trimmed.forEach { bill ->
+
+        /** 单条账单的落盘形状。导出文件直接复用它，两边字段永远一致。 */
+        internal fun encodeBill(bill: BillRecord): JSONObject {
             val obj = JSONObject()
                 .put("id", bill.id)
                 .put("at", bill.at)
@@ -452,21 +562,36 @@ class BillStore(
             bill.secs?.let { obj.put("s", it) }
             if (bill.dead) obj.put("d", true)
             bill.category?.let { obj.put("c", it) }
-            array.put(obj)
+            return obj
         }
-        // 账单是用户唯一的历史记录，用 commit 同步落盘，进程被杀也不丢
-        sp.edit().putString(key, array.toString()).commit()
-    }
 
-    private fun round3(value: Double): Double = round(value * 1000.0) / 1000.0
+        /**
+         * 老账本没有类型码时的兜底。
+         *
+         * 加 `category` 之前的记录只有设备名，实测设备上两本账本的形状是：
+         * - 798：「雅3——1洗热间—热水龙头5」「雅3——1洗热间—淋浴6」→ 淋浴
+         * - 胖乖：「雅3-1热」「雅3-1冷」「静4-4热」→ 饮水机的热/冷水口
+         *
+         * 所以只认「淋浴 / 热水龙头 / 洗热」这几个明确指向淋浴的字样，其余按饮水。
+         * 这是启发式、不是权威：新账单都自带服务端的 `goodsCategory`，根本走不到这里；
+         * 只有「加字段之前就已存在、且服务端已清账查不回来」的那几条才用得上，
+         * 判错了也不会覆盖任何权威数据。
+         */
+        private fun guessCategory(name: String?): String {
+            val n = name.orEmpty()
+            val shower = n.contains("淋浴") || n.contains("热水龙头") || n.contains("洗热")
+            return if (shower) BillRecord.CATEGORY_SHOWER else BillRecord.CATEGORY_DRINK
+        }
 
-    private fun Long.toLocalDate(): LocalDate =
-        Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()).toLocalDate()
+        private fun round3(value: Double): Double = round(value * 1000.0) / 1000.0
 
-    companion object {
+
         private const val PREFS = "bill_store"
         private const val KEY_PREFIX = "bills_"
         private const val MAX_BILLS = 3000
+
+        /** 同步失败后的自动重试冷却时间，30 分钟。手动下拉不受限。 */
+        private const val BACKOFF_MS = 30 * 60 * 1000L
 
         /** 账本归属只可能是手机号，11 位数字。 */
         private val PHONE = Regex("""\d{11}""")

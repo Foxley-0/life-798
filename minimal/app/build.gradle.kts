@@ -22,11 +22,11 @@ android {
         applicationId = "com.life798.mini"
         minSdk = 26
         targetSdk = 35
-        // 2.2.0 —— 饮水/淋浴分开统计、洗衣完成卡、凭证失效改为提示条、首次使用须知。
-        // versionCode 35 接在 2.1.0(34) 之后，保证从任何旧包都能直接覆盖安装。
+        // 2.3.0 —— 账单可导出/换机导入、洗衣「请取衣」独立成条、账单同步改增量静默。
+        // versionCode 36 接在 2.2.0(35) 之后，保证从任何旧包都能直接覆盖安装。
         // 版本号只进不退：beta 用满 2.0.x 之后，正式版直接上 2.1.0。
-        versionCode = 35
-        versionName = "2.2.0"
+        versionCode = 36
+        versionName = "2.3.0"
 
         buildConfigField("String", "API_GATEWAY", "\"${secret("API_GATEWAY")}\"")
         buildConfigField("String", "APP_SIGN_SALT", "\"${secret("APP_SIGN_SALT")}\"")

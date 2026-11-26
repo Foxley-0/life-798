@@ -67,6 +67,7 @@ import com.life798.mini.ui.AboutPage
 import com.life798.mini.ui.ReferencesScreen
 import com.life798.mini.ui.AppViewModel
 import com.life798.mini.ui.AppearanceScreen
+import com.life798.mini.ui.BillTransferScreen
 import com.life798.mini.ui.LoginScreen
 import com.life798.mini.ui.PangguaiWashingScreen
 import com.life798.mini.ui.LoginMode
@@ -127,7 +128,7 @@ private const val PAGE_COUNT = 3
  *
  * 返回键只做一件事：出栈。所有页面都不再自己挂 BackHandler。
  */
-private enum class Route { TABS, START, USING, ABOUT, THEME, REFERENCES, ADD_ACCOUNT, PANGGUAI_START, PANGGUAI_WASHING, PANGGUAI_WATER_START, PANGGUAI_WATER_USING }
+private enum class Route { TABS, START, USING, ABOUT, THEME, REFERENCES, BILL_DATA, ADD_ACCOUNT, PANGGUAI_START, PANGGUAI_WASHING, PANGGUAI_WATER_START, PANGGUAI_WATER_USING }
 
 private val RouteStackSaver = listSaver<List<String>, String>(
     save = { it },
@@ -729,6 +730,16 @@ private fun MainContent(
                 onBack = onBack
             )
 
+            // 账单导出 / 导入。手机号校验在 BillTransfer 里做，这里只负责接线：
+            // 读快照、写快照都走 ViewModel，页面本身不碰存储。
+            Route.BILL_DATA.name -> BillTransferScreen(
+                hui798Phone = state.phone,
+                pangguaiPhone = state.account(Platform.PANGGUAI).phone,
+                onLoadBooks = vm::currentBillBooks,
+                onImportBooks = vm::importBillBooks,
+                onBack = onBack
+            )
+
             else -> {
                 HorizontalPager(
                     state = pagerState,
@@ -793,6 +804,13 @@ private fun MainContent(
                                 // 胖乖的运行态：三处卡片要和 798 一视同仁，必须喂进来
                                 pgWater = waterState,
                                 pgLaundry = state.laundrySessions,
+                                // 待取件横幅：点整条进状态页（多台时是最新完成的那台），
+                                // 点「已取衣」一次性清掉本地完成记录
+                                onOpenPickup = { session ->
+                                    vm.openWashing(session.sessionId)
+                                    onPush(Route.PANGGUAI_WASHING)
+                                },
+                                onDismissPickup = vm::dismissAllLaundryPickup,
                                 // 点任意一张设备卡：卡片只回传「是谁」，去哪一页在这里分流。
                                 // 三条链路各走各的，卡片本身不知道洗衣和淋浴有什么区别。
                                 onOpenDevice = { item ->
@@ -841,8 +859,8 @@ private fun MainContent(
                             1 -> UsageScreen(
                                 state = state,
                                 bottomInset = bottomInset,
-                                onSyncHui798 = vm::syncBills,
-                                onSyncPangguai = vm::syncPangguaiBills
+                                onSyncHui798 = { silent -> vm.syncBills(silent) },
+                                onSyncPangguai = { silent -> vm.syncPangguaiBills(silent) }
                             )
 
                             else -> SettingsScreen(
@@ -850,6 +868,7 @@ private fun MainContent(
                                 bottomInset = bottomInset,
                                 onOpenAppearance = { onPush(Route.THEME) },
                                 onOpenAbout = { onPush(Route.ABOUT) },
+                                onOpenBillData = { onPush(Route.BILL_DATA) },
                                 onAddAccount = { platform ->
                                     vm.beginAddAccount(platform)
                                     onPush(Route.ADD_ACCOUNT)

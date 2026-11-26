@@ -91,8 +91,9 @@ private data class BillSnapshot(
 fun UsageScreen(
     state: UiState,
     bottomInset: Dp,
-    onSyncHui798: () -> Unit,
-    onSyncPangguai: () -> Unit,
+    /** 参数 `silent = true` 表示「进页面自动同步」，不显示下拉转圈，见下方 LaunchedEffect。 */
+    onSyncHui798: (silent: Boolean) -> Unit,
+    onSyncPangguai: (silent: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -106,7 +107,7 @@ fun UsageScreen(
     val syncing: Boolean
     val revision: Int
     val syncError: String?
-    val syncNow: () -> Unit
+    val syncNow: (silent: Boolean) -> Unit
     if (platform == Platform.HUI798) {
         syncing = state.billsSyncing
         revision = state.billsRevision
@@ -134,9 +135,13 @@ fun UsageScreen(
     // 一天只同步一次：账单是按天产生的，反复切进切出用量页没必要每次都打服务端。
     // 跨过零点 syncedToday() 自然变 false，第二天第一次进来会再拉一遍。
     // 「今天已同步」的落戳放在同步成功的分支里（见 AppViewModel.syncBills），
-    // 失败不落戳，下次进来还能重试。
+    // 失败不落戳，下次进来还能重试 —— 但失败后 30 分钟内不再自动重试
+    // （inBackoff），否则网络一断，切一次页面就打一次服务端。手动下拉不受限。
+    //
+    // silent = true：进页面这一次**不转圈**。本地账本先照常渲染，同步在后台跑完
+    // 才刷一次 revision，用户看到的是数字自己变准，而不是被一个转圈按在顶上等。
     LaunchedEffect(platform, session.isActive) {
-        if (session.isActive && !store.syncedToday()) syncNow()
+        if (store.shouldAutoSync()) syncNow(true)
     }
 
     // 当前选中的年月可能没有账单（比如刚跨月、或者同步前是空的），
@@ -186,7 +191,8 @@ fun UsageScreen(
 
         PullToRefresh(
             isRefreshing = syncing,
-            onRefresh = syncNow,
+            // 手动下拉：转圈必须有，用户得知道自己在等什么
+            onRefresh = { syncNow(false) },
             modifier = Modifier.weight(1f)
         ) {
             LazyColumn(

@@ -93,8 +93,9 @@ fun buildNotices(state: UiState, onFix: (Platform) -> Unit): List<AppNotice> {
         )
 
         // 未登录本身不算大事：扫码时会自己跳登录。
-        // 只有本地还挂着洗衣记录时才提示 —— 那些记录查不到状态了。
-        SessionState.EMPTY -> if (state.laundrySessions.isNotEmpty()) {
+        // 只有本地还挂着**正在跑**的洗衣订单时才提示 —— 那些记录查不到状态了。
+        // 只看 running：已完成的历史记录不需要网络，挂在这里只会让提示条永远消不掉。
+        SessionState.EMPTY -> if (state.laundrySessions.any { it.running }) {
             out += AppNotice(
                 id = "auth.pg.empty",
                 level = NoticeLevel.WARN,

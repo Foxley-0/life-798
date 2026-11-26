@@ -60,11 +60,37 @@ class LaundryController(
     private var sessions: List<LaundrySession> = emptyList()
     private var pollJob: Job? = null
 
-    /** 冷启动恢复：读磁盘、推给界面、有进行中的就开轮询。 */
+    /** 冷启动恢复：读磁盘、清掉过期记录、推给界面、有进行中的就开轮询。 */
     fun restore() {
         sessions = store.load()
+        // 完成态不会自己消失，用户也未必会进状态页点「清除记录」。
+        // 不清的话它会在本地一直攒着（首页虽然只显示 24 小时内的，但没人需要
+        // 一条半年前的洗衣记录），所以启动时按 TTL 收一次。
+        if (prune(System.currentTimeMillis())) store.save(sessions)
         emit(sessions)
         schedule()
+    }
+
+    /**
+     * 清掉已完成超过 [ENDED_TTL_MS] 和已关闭的会话。
+     *
+     * @return 是否真的删了东西（决定要不要落盘）
+     */
+    private fun prune(now: Long): Boolean {
+        val kept = sessions.filterNot { s ->
+            when (s.phase) {
+                LaundryPhase.Ended ->
+                    now - (s.finishedAtMillis ?: s.expectedEndMillis ?: s.startedAtMillis) >
+                        ENDED_TTL_MS
+
+                LaundryPhase.Closed -> true
+                else -> false
+            }
+        }
+        if (kept.size == sessions.size) return false
+        AppLog.i("Laundry", "清理过期洗衣记录 ${sessions.size - kept.size} 条")
+        sessions = kept
+        return true
     }
 
     /** 启动成功后落一条新会话。 */
@@ -80,6 +106,25 @@ class LaundryController(
     fun dismiss(sessionId: String) {
         sessions = sessions.filterNot { it.sessionId == sessionId }
         persist()
+    }
+
+    /**
+     * 「全部标记已取衣」：一次清掉所有完成态会话。
+     *
+     * 只处理 [LaundryPhase.Ended] —— 洗衣还在跑的那种不能顺手删掉，
+     * 否则首页正显示着的「洗衣中」卡会突然消失。
+     *
+     * @return 清掉了几条
+     */
+    fun dismissAllEnded(): Int {
+        val before = sessions.size
+        sessions = sessions.filterNot { it.phase == LaundryPhase.Ended }
+        val removed = before - sessions.size
+        if (removed > 0) {
+            AppLog.i("Laundry", "全部标记已取衣，清除 $removed 条完成记录")
+            persist()
+        }
+        return removed
     }
 
     fun byId(sessionId: String): LaundrySession? =
@@ -256,5 +301,8 @@ class LaundryController(
         /** 20 → 30 → 40 秒封顶，断网时不硬刷。 */
         fun backoffMillis(failures: Int): Long =
             POLL_INTERVAL_MS + (failures - 1).coerceIn(0, 2) * 10_000L
+
+        /** 完成态记录保留 7 天：首页只看 24 小时内的，再往前就该清了。 */
+        const val ENDED_TTL_MS = 7L * 24 * 60 * 60 * 1000
     }
 }

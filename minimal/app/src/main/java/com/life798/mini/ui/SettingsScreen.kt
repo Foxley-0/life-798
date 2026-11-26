@@ -49,6 +49,7 @@ fun SettingsScreen(
     bottomInset: Dp,
     onOpenAppearance: () -> Unit,
     onOpenAbout: () -> Unit,
+    onOpenBillData: () -> Unit,
     onAddAccount: (Platform) -> Unit,
     onLogout: (Platform) -> Unit,
 ) {
@@ -104,10 +105,17 @@ fun SettingsScreen(
                 SmallTitle(text = "通用", modifier = Modifier.fillMaxWidth())
                 Card(modifier = Modifier.fillMaxWidth()) {
                     ArrowPreference(
+                        title = "账单数据",
+                        summary = "导出备份、从文件恢复（按手机号校验）",
+                        onClick = onOpenBillData
+                    )
+                    HorizontalDivider()
+                    ArrowPreference(
                         title = "外观",
                         summary = "深浅模式、配色与底栏样式",
                         onClick = onOpenAppearance
                     )
+                    HorizontalDivider()
                     ArrowPreference(
                         title = "关于",
                         summary = "版本信息与开源许可",
